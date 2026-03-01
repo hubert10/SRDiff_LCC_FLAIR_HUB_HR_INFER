@@ -18,5 +18,5 @@ DATA_DIR="/my_data/"
 export DATA_DIR
 source /home/eouser/flair_venv/bin/activate
 which python
-cd $HOME/exp_2026/MISR_JOINT_SRDiff_LCC_FLAIR3_HR_INFER
-python trainer.py --config_file=./configs/train_main/  --exp_name misr/srdiff_maxvit_ltae_ckpt --hparams="diff_net_ckpt=/my_data/Results/MISR_JOINT_SRDiff_LCC_FLAIR3_HR_INFER/results/checkpoints/misr/srdiff_maxvit_ltae_ckpt" --infer
+cd $HOME/exp_2026/SRDiff_LCC_FLAIR_HUB_HR_INFER
+python trainer.py --config_file=./configs/train_main/  --exp_name misr/srdiff_maxvit_ltae_ckpt --hparams="diff_net_ckpt=/my_data/Results/SRDiff_LCC_FLAIR_HUB_HR_INFER/results/checkpoints/misr/srdiff_maxvit_ltae_ckpt" --infer

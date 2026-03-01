@@ -22,7 +22,7 @@ from make_dir import create_dir
 # converts from png to tiff
 
 PROJECT_ROOT = (
-    "D:\kanyamahanga\Bigwork\MISR_JOINT_SRDiff_LCC_FLAIR3_HR_INFER"
+    "D:\kanyamahanga\Bigwork\SRDiff_LCC_FLAIR_HUB_HR_INFER"
 )
 
 

@@ -1,5 +1,5 @@
 paths :   
-    out_folder: "/my_data/Results/MISR_JOINT_SRDiff_LCC_FLAIR3_HR_INFER/results/"
+    out_folder: "/my_data/Results/SRDiff_LCC_FLAIR_HUB_HR_INFER/results/"
     out_model_name: "misr-s2-aer-seg"
 
     train_csv: /my_data/FLAIR_HUB/ALL_CSV/FLAIR_HUB_TRAIN.csv

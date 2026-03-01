@@ -16,5 +16,5 @@ export CONDA_ENVS_PATH=$HOME/.conda/envs
 export DATA_DIR=$BIGWORK
 conda activate flair_venv
 which python
-cd $HOME/MISR_JOINT_SRDiff_LCC_FLAIR3_HR_INFER
+cd $HOME/SRDiff_LCC_FLAIR_HUB_HR_INFER
 srun python clouds_masks_stats_final_save.py
