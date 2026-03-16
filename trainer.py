@@ -304,7 +304,6 @@ class Trainer:
             # for batch_idx, batch in pbar:
             batch = move_to_cuda(batch)
             _, _, _, ret, loss = self.sample_and_test(batch)
-            print(" --------------------------- loss -------------------:", loss)
             # img, preds, cond_net_out, ret, loss = self.sample_and_test(batch)
 
             if not hparams["train_diffsr"]:

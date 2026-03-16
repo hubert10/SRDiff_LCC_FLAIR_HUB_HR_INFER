@@ -2,6 +2,8 @@ import argparse
 import os
 import yaml
 import sys
+from pathlib import Path
+from typing import Dict
 
 # sys.path.append('../')
 
@@ -97,7 +99,7 @@ def set_hparams(
 
     saved_hparams = {}
     hparams.update(load_config(args.config_file))
-    args_work_dir = hparams["outputs"]["out_folder"]
+    args_work_dir = hparams["paths"]["out_folder"]
 
     if args.exp_name != "":
         args_work_dir = str(args_work_dir) + f"checkpoints/{args.exp_name}"
