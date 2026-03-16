@@ -1,5 +1,6 @@
 import torch
 import timm
+import os
 from torch import nn
 import torch.nn.functional as F
 import torchvision.transforms as T
@@ -36,7 +37,7 @@ class SITSAerialSegmenter(nn.Module):
             config=config,
         )
 
-        if not hparams["resume"]:
+        if not hparams["resume"] and not hparams["infer"]:
             if hparams["cond_net_ckpt"] != "" and os.path.exists(hparams["cond_net_ckpt"]):
                 weights_path = hparams["cond_net_ckpt"]
                 if torch.cuda.is_available():

@@ -212,6 +212,21 @@ class GaussianDiffusion(nn.Module):
         ]  # shape (B, C, H, W)
         return closest_sat_image
 
+
+    def apply_cond_hr_encoder(self, img_hr):
+        # Prevents PyTorch from tracking gradients, reducing memory
+        # usage and speeding up inference.
+        _, _, res2, res3, res4 = self.aerial_net(img_hr)
+        # print("---------------Conditioning Temp Feats-------------------")
+        # print("cond 0:", cond[0].shape)
+        # print("cond 1:", cond[1].shape)
+        # print("cond 2:", cond[2].shape)
+        # # torch.Size([2, 64, 16, 16])
+        # # torch.Size([2, 64, 16, 16])
+        # # torch.Size([2, 64, 16, 16])
+        # print()
+        return [res2, res3, res4]
+
     # TRAINING STEP
 
     def forward(
@@ -243,11 +258,7 @@ class GaussianDiffusion(nn.Module):
         # cond: extracted temporal features from the low-resolution image
         # encoded with HighResnet-LTAE temporal encoder
 
-        self.cond_net.eval()
-        # Prevents PyTorch from tracking gradients, reducing memory
-        # usage and speeding up inference.
-        with torch.no_grad():
-            cond_net_out, _, _, cond = self.cond_net(img_lr, dates)
+        cond_net_out, _, _, cond = self.cond_net(img_lr, dates)
 
         # cond: shape (B, T, C, H, W) where T is the number of time steps
         # img_lr_up: shape (B, T, C, H, W) where T is the number of time steps
@@ -508,6 +519,7 @@ class GaussianDiffusion(nn.Module):
     @torch.no_grad()
     def sample(
         self,
+        img,
         img_lr,  # low-resolution image used for conditioning
         img_lr_up,  # upsampled LR image used for upsampling the noisy image
         hr_img,  # shape of the output image
@@ -542,6 +554,9 @@ class GaussianDiffusion(nn.Module):
         # and apply it in every iteration.
 
         cond_net_out, _, _, cond = self.cond_net(img_lr, dates)
+        
+        # HR conditioning 
+        hr_cond = self.apply_cond_hr_encoder(img)
 
         # 3. Iterates over the time steps from the reverse diffusion process
         it = reversed(range(0, self.num_timesteps))  # num_timesteps: 500
@@ -583,7 +598,7 @@ class GaussianDiffusion(nn.Module):
                     img,  # x_t
                     torch.full((b,), j, device=device, dtype=torch.long),  # t
                     [feat[:, i] for feat in cond],  # x_e
-                    hr_img
+                    hr_cond, # for conditioning
                     # img_lr_up[:, i, :, :],
                 )
                 if save_intermediate:

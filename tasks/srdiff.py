@@ -62,7 +62,7 @@ class SRDiffTrainer(Trainer):
             config=hparams,
         )
 
-        if not hparams["resume"]:
+        if not hparams["resume"] and not hparams["infer"]:
             if hparams["cond_net_ckpt"] != "" and os.path.exists(hparams["cond_net_ckpt"]):
                 weights_path = hparams["cond_net_ckpt"]
                 if torch.cuda.is_available():
@@ -193,6 +193,7 @@ class SRDiffTrainer(Trainer):
         sc_img_hr = img_hr[:, :4, :, :]
 
         img_sr, rrdb_out = self.model.gaussian.sample(
+            img, # HR image for conditioning
             img_lr,
             img_lr_up,
             sc_img_hr,

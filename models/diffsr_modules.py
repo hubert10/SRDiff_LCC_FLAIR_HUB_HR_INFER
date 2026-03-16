@@ -41,8 +41,13 @@ class Unet(nn.Module):
         # dim: [4, 64, 128, 192, 256]
         in_out = list(zip(dims[:-1], dims[1:]))
         groups = 0
-        self.proj_hr = nn.Conv2d(in_channels=hparams["num_channels_sat"], out_channels=64, kernel_size=1)
 
+        # Used for HR image conditioning
+        channels = [128, 256, 512]
+
+        self.red_channels = nn.ModuleList(
+            [nn.Conv2d(c, c // 2, kernel_size=1) for c in channels]
+        )
         # Projects conditioning features (e.g., from RRDB, LTAE)
         # into the same space as the input image.
         # Uses transposed convolutions to match spatial dimensions.
@@ -142,6 +147,18 @@ class Unet(nn.Module):
         # processed.append(upscaled)
         return upscaled
 
+
+    def super_patch_crop_and_upsample(self, cond, feats):
+        # Cropping the center of the cond tensor which
+        # represents the  super-patch of the Sat LR image
+        cropping_ratio = int(cond.shape[-1] / 4)
+        transform = T.CenterCrop((cropping_ratio, cropping_ratio))
+        cond = transform(cond)
+        upscaled = F.interpolate(
+            cond, size=feats.shape[-2:], mode="bilinear", align_corners=False
+        )
+        return upscaled
+
     def forward(self, x, time, cond, hr_img=None):
         # x: noisy image at current diffusion step.
         # time: timestep scalar used for embedding.
@@ -152,9 +169,14 @@ class Unet(nn.Module):
         t = self.mlp(t)
         h = []
 
-        # Encode HR image
+        # Extract HR features for conditioning at multiple scales:
         if hr_img is not None:
-            hr_img = self.proj_hr(hr_img)
+            # hr_feats = self.extract_hr_feats(hr_img)
+            hr_feats = hr_img
+            hr_feats = [layer(f) for layer, f in zip(self.red_channels, hr_feats)]
+
+        else:
+            hr_feats = [None] * len(cond)
 
         # print("cond 0:", cond[0].shape)
         # print("cond 1:", cond[1].shape)
@@ -170,11 +192,37 @@ class Unet(nn.Module):
             # print("i:", i)
             # print("x:", x.shape)
             # print("cond[i]:", cond[i].shape)
-            cond_i = self.upsample_to_target(cond[i], x)
-            if i == 0 and hr_img is not None:
-                x = x.add_(cond_i).add_(hr_img)
-            else:
-                x = x.add_(cond_i)
+            # the lowest resolution is not there!
+            if i != 3:
+                # print()
+                # print("i:", i)
+                # print("x:", x.shape)
+                # print("cond[i]:", cond[i].shape)
+
+                # cond_i = self.super_patch_crop_and_upsample(cond[i], x)
+                # x = x.add_(cond_i)
+
+                # Fuse LR and HR Conditioning
+
+                # LR-SITS features  ----\
+                #                         ---> fused conditioning ---> U-Net
+                # HR image features ----/
+
+                # So the model predicts:
+                # εθ = UNet(x_t , t , cond = [LR_features + HR_features])
+
+                cond_i = self.super_patch_crop_and_upsample(cond[i], x)
+
+                if hr_feats[i] is not None:
+                    hr_i = F.interpolate(
+                        hr_feats[i],
+                        size=x.shape[-2:],
+                        mode="bilinear",
+                        align_corners=False,
+                    )
+                    cond_i = cond_i + hr_i  # fuse LR and HR guidance
+
+                x = x + cond_i
             h.append(x)
             x = downsample(x)
 
