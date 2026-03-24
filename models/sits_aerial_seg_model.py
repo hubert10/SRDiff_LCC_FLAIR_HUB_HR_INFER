@@ -84,7 +84,6 @@ class SITSAerialSegmenter(nn.Module):
         # Replace the old conv with the new one
         self.aerial_net.stem.conv1 = new_conv
 
-
         # give latent_diff access
         self.gaussian.aerial_net = self.aerial_net
 
@@ -118,7 +117,9 @@ class SITSAerialSegmenter(nn.Module):
 
         h, w = img.size()[-2:]
         # Aerial branch
-        res0, res1, res2, res3, res4 = self.aerial_net(img)
+        hr_0, hr_1, hr_2, hr_3, hr_4 = self.aerial_net(img)
+
+        # print("img:", img.shape)
 
         # SITS branch
         sits_logit, multi_lvls_cls, red_temp_feats, _ = self.sits_network(img_sr, dates)
@@ -134,10 +135,10 @@ class SITSAerialSegmenter(nn.Module):
 
         # print("multi_lvls_outs:", multi_lvls_outs[3].shape)
         # Fusion FFCA
-        res2, res3, res4 = self.fusion_module([res2, res3, res4], red_temp_feats)
+        fus_2, fus_3, fus_4 = self.fusion_module([hr_2, hr_3, hr_4], red_temp_feats)
 
         # Decoder
-        logits = self.decoder(res0, res1, res2, res3, res4, h, w)
+        logits = self.decoder(hr_0, hr_1, fus_2, fus_3, fus_4, h, w)
         return sits_logit, multi_lvls_cls, logits
 
 

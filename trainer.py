@@ -10,24 +10,7 @@ from tqdm import tqdm
 from pathlib import Path
 import torch.distributed as dist
 from torch.utils.tensorboard import SummaryWriter
-
-from utils.utils_dataset import (
-    read_config,
-    pad_collate_train,
-    pad_collate_predict,
-    save_image_to_nested_folder,
-    save_hr_image_to_nested_folder,
-)
 from data.datamodule import FlairDataModule
-from utils.utils_prints import (
-    print_config,
-    print_recap,
-    print_metrics,
-    print_inference_time,
-    print_iou_metrics,
-    print_f1_metrics,
-    print_overall_accuracy,
-)
 from utils.metrics import generate_miou, generate_mf1s, generate_metrics
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "1"
@@ -80,17 +63,6 @@ class Trainer:
         self.config = hparams
         self.device = device
         self.datamodule = FlairDataModule(hparams)
-
-    def crop_sits_image(self, input_tensor: torch.Tensor) -> torch.Tensor:
-        """
-        - cropped upsampled image to (5, 100, 100).
-        Returns:
-        - torch.Tensor: Upsampled tensor of shape (5, 256, 256).
-        """
-        cropping_ration = int(input_tensor.shape[-1] / 4)
-        transform = cT.CenterCrop((cropping_ration, cropping_ration))
-        cropped_tensor = transform(input_tensor)
-        return cropped_tensor
 
     def seed_worker(self, worker_id):
         worker_seed = torch.initial_seed() % 2**32
@@ -291,6 +263,7 @@ class Trainer:
                 )
                 if not hparams["train_diffsr"]:
                     save_val["val_loss"] = val_loss_list
+                print("val_loss_list:", val_loss_list)
                 save_val.to_csv(val_res_path, sep=";", index=False)
 
     def validate(self, training_step):
@@ -402,7 +375,7 @@ class Trainer:
                         # For single image batch size, we can use the following code
                         if hparams["test_batch_size"] == 1:
                             img_lr = [
-                                self.tensor2img(self.crop_sits_image(im[None, ...]))
+                                self.tensor2img(im[None, ...])
                                 for im in img_lr.squeeze()
                             ]
 
@@ -488,19 +461,8 @@ class Trainer:
 
         csv_path = Path(hparams["paths"]["test_csv"])
         df = pd.read_csv(csv_path, sep=";")
-
         gt_paths = df[hparams["labels"][0]].tolist()
-
-        # pred_msk = os.path.join(self.gen_dir, "PR")
         pred_msk = os.path.join(self.gen_dir, "PR")
-
-        # mIou, ious = generate_miou(hparams, gt_paths, pred_msk)
-        # mf1, f1s, oa = generate_mf1s(hparams, gt_paths, pred_msk)
-
-        # print_iou_metrics(mIou, ious)
-        # print_f1_metrics(mf1, f1s)
-        # print_overall_accuracy(oa)
-
         generate_metrics(hparams, gt_paths, pred_msk, self.gen_dir, hparams["labels"][0])
     
     # utils
@@ -555,54 +517,3 @@ if __name__ == "__main__":
 # scp -r D:\kanyamahanga\Datasets\FLAIR_HUB\data nhgnkany@transfer.cluster.uni-hannover.de:/bigwork/nhgnkany/FLAIR_HUB
 
 # scp -r "D:/kanyamahanga/Datasets/FLAIR_HUB/data/*" nhgnkany@transfer.cluster.uni-hannover.de:/bigwork/nhgnkany/FLAIR_HUB/
-
-
-# torch.Size([2, 2])
-# layer out: torch.Size([12, 512, 2, 2])
-# block out: torch.Size([12, 512, 2, 2])
-# reduced_temp_feats 0: torch.Size([1, 12, 64, 10, 10])
-# reduced_temp_feats 1: torch.Size([1, 12, 128, 5, 5])
-# reduced_temp_feats 2: torch.Size([1, 12, 256, 3, 3])
-# reduced_temp_feats 3: torch.Size([1, 12, 512, 2, 2])
-# red_temp_feats 0: torch.Size([1, 64, 10, 10])
-# red_temp_feats 1: torch.Size([1, 128, 5, 5])
-# red_temp_feats 2: torch.Size([1, 256, 3, 3])
-# red_temp_feats 3: torch.Size([1, 512, 2, 2])
-# inputs 0: torch.Size([1, 64, 10, 10])
-# inputs 1: torch.Size([1, 128, 5, 5])
-# inputs 2: torch.Size([1, 256, 3, 3])
-# inputs 3: torch.Size([1, 512, 2, 2])
-# psp_outs x0: torch.Size([1, 512, 2, 2])
-# ppm_out in: torch.Size([1, 512, 2, 2])
-# ppm_out out: torch.Size([1, 512, 1, 1])
-# ppm_out in: torch.Size([1, 512, 2, 2])
-# ppm_out out: torch.Size([1, 512, 2, 2])
-# ppm_out in: torch.Size([1, 512, 2, 2])
-# ppm_out out: torch.Size([1, 512, 3, 3])
-# ppm_out in: torch.Size([1, 512, 2, 2])
-# ppm_out out: torch.Size([1, 512, 4, 4])
-# ppm_outs 0: torch.Size([1, 512, 2, 2])
-# ppm_outs 1: torch.Size([1, 512, 2, 2])
-# ppm_outs 2: torch.Size([1, 512, 2, 2])
-# output conc: torch.Size([1, 512, 2, 2])
-# fpn_outs[i]: torch.Size([1, 512, 2, 2])
-# fpn_outs[i]: torch.Size([1, 512, 3, 3])
-# fpn_outs[i]: torch.Size([1, 512, 5, 5])
-# multi_levels_feature_maps 0: torch.Size([1, 512, 10, 10])
-# multi_levels_feature_maps 1: torch.Size([1, 512, 10, 10])
-# multi_levels_feature_maps 2: torch.Size([1, 512, 10, 10])
-# multi_levels_feature_maps 3: torch.Size([1, 512, 10, 10])
-# last_ft_map: torch.Size([1, 512, 10, 10])
-# cls_sits_ft_map: torch.Size([1, 19, 10, 10])
-# multi_lvls_cls 1: torch.Size([1, 19, 10, 10])
-# multi_lvls_cls 2: torch.Size([1, 19, 10, 10])
-# multi_lvls_cls 3: torch.Size([1, 19, 10, 10])
-# sits_logit: torch.Size([1, 19, 10, 10])
-# enc_features: torch.Size([1, 12, 64, 10, 10])
-# enc_features: torch.Size([1, 12, 128, 5, 5])
-# enc_features: torch.Size([1, 12, 256, 3, 3])
-# enc_features: torch.Size([1, 12, 512, 2, 2])
-#                                                                                                                                                                                                                 cond 0: torch.Size([1, 64, 10, 10])
-# cond 1: torch.Size([1, 128, 5, 5])                                                                                                                                                      | 0/500 [00:00<?, ?it/s]
-# cond 2: torch.Size([1, 256, 3, 3])
-# cond 3: torch.Size([1, 512, 2, 2])

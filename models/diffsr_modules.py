@@ -135,18 +135,6 @@ class Unet(nn.Module):
         # processed.append(upscaled)
         return upscaled
 
-
-    def super_patch_crop_and_upsample(self, cond, feats):
-        # Cropping the center of the cond tensor which
-        # represents the  super-patch of the Sat LR image
-        cropping_ratio = int(cond.shape[-1] / 4)
-        transform = T.CenterCrop((cropping_ratio, cropping_ratio))
-        cond = transform(cond)
-        upscaled = F.interpolate(
-            cond, size=feats.shape[-2:], mode="bilinear", align_corners=False
-        )
-        return upscaled
-
     def forward(self, x, time, cond, hr_img=None):
         # x: noisy image at current diffusion step.
         # time: timestep scalar used for embedding.

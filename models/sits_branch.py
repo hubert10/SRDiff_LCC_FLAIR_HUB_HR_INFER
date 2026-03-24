@@ -111,6 +111,13 @@ class SITSSegmenter(nn.Module):
         # print("enc_features:", enc_temp_feats[1].shape)
         # print("enc_features:", enc_temp_feats[2].shape)
         # print("enc_features:", enc_temp_feats[3].shape)
+        # print()
+        # print("multi_lvls_cls:", multi_lvls_cls[0].shape)
+        # print("multi_lvls_cls:", multi_lvls_cls[1].shape)
+        # print("multi_lvls_cls:", multi_lvls_cls[2].shape)
+        # print("multi_lvls_cls:", multi_lvls_cls[3].shape)
+        # print()
+        # print("sits_logit:", sits_logit.shape)
 
         # enc_temp_feats: torch.Size([2, 12, 64, 64, 64])
         # enc_temp_feats: torch.Size([2, 12, 128, 32, 32])

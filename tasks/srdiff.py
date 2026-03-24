@@ -92,17 +92,53 @@ class SRDiffTrainer(Trainer):
         self.global_step = 0
         return self.model
 
+    def build_optimizer(self, model):
+        params = list(model.parameters())
+        params = [p for p in params if p.requires_grad]
+        optimizer = torch.optim.AdamW(params, lr=hparams["lr"])
+        return optimizer
+
+    def build_scheduler(self, optimizer):
+        # 1. Scheduler type
+        # It uses torch.optim.lr_scheduler.MultiStepLR, which reduces the learning
+        # rate (LR) by a factor (gamma) at specific training steps (called milestones)
+
+        # 2. Milestones
+        # This means the LR will drop twice:
+        # First at 50% of decay_steps
+        # Then at 90% of decay_steps
+        # Example: if decay_steps = 100000, milestones = [50000, 90000].
+
+        # 3. Gamma factor
+        # At each milestone, the LR is multiplied by 0.1 (reduced by 10×).
+        # Example: if LR starts at 0.001,
+        # at step 50k → LR becomes 0.0001
+        # at step 90k → LR becomes 0.00001.
+
+        # 4. Effect
+        # This creates a piecewise-constant decay schedule:
+        # LR stays constant in between milestones.
+        # At the milestone steps, LR suddenly drops.
+
+        scheduler_param = {
+            "milestones": [
+                np.floor(hparams["decay_steps"] * 0.5),
+                np.floor(hparams["decay_steps"] * 0.9),
+            ],
+            "gamma": 0.1,
+        }
+        return torch.optim.lr_scheduler.MultiStepLR(optimizer, **scheduler_param)
+
 
     def training_step(self, batch):
         img = batch["img"]  # torch.Size([4, 5, 512, 512])
-        dem_elev = batch["dem_elev"]  # torch.Size([4, 5, 512, 512])
-        img_hr = batch["img_hr"]  # torch.Size([4, 5, 512, 512])
-        img_lr = batch["img_lr"]  # torch.Size([4, 2, 3, 40, 40])
-        img_lr_up = batch["img_lr_up"]  # torch.Size([4, 2, 3, 160, 160])
-        labels = batch["labels"]  # torch.Size([4, 2, 3, 160, 160])
-        labels_sr = batch["labels_sr"]  # torch.Size([4, 2, 3, 160, 160])
+        img_hr = batch["img_hr"]  # torch.Size([4, 5, 64, 64])
+        img_lr = batch["img_lr"]  # torch.Size([4, 2, 3, 10, 10])
+        img_lr_up = batch["img_lr_up"]  # torch.Size([4, 2, 3, 64, 64])
+        labels = batch["labels"]  # torch.Size([4, 2, 3, 64, 64])
+        labels_sr = batch["labels_sr"]  # torch.Size([4, 2, 3, 64, 64])
         dates = batch["dates_encoding"]
-        closest_idx = batch["closest_idx"]  # torch.Size([4, 2, 3, 160, 160])
+        closest_idx = batch["closest_idx"]  # torch.Size([4, 2, 3, 64, 64])
         sc_img_hr = img_hr[:, :4, :, :]
 
         # print("img_hr:", img_hr.shape)
@@ -127,6 +163,9 @@ class SRDiffTrainer(Trainer):
             closest_idx=closest_idx,
             config=self.config,
         )
+
+        # print("img_sr train:", img_sr.shape)
+        # print("sc_img_hr:", sc_img_hr.shape)
 
         # for classification branches
         cls_sits, multi_outputs, aer_outputs = self.model(img, img_sr, dates)
@@ -158,8 +197,8 @@ class SRDiffTrainer(Trainer):
             + self.loss_aux_sat_weight * aux_loss3
         )
 
-        # print("labels:", labels.shape)
-        # print("aer_outputs:", aer_outputs.shape)
+        # print("loss_sat:", loss_sat)
+        # print("loss_sr:", losses["sr"])
 
         # Loss for AER branch
         loss_aer = self.criterion_aer(aer_outputs, labels.long())
@@ -200,6 +239,9 @@ class SRDiffTrainer(Trainer):
             dates=dates,
             config=self.config,
         )
+
+        # print("img_sr infer:", img_sr.shape)
+
         # during sampling, only the aer branch is used
         _, _, aer_outputs = self.model(img, img_sr, dates)
         proba = torch.softmax(aer_outputs, dim=1)
@@ -229,39 +271,3 @@ class SRDiffTrainer(Trainer):
             ret["n_samples"] += 1
         return img_sr, preds, rrdb_out, ret, ret
 
-    def build_optimizer(self, model):
-        params = list(model.parameters())
-        params = [p for p in params if p.requires_grad]
-        optimizer = torch.optim.AdamW(params, lr=hparams["lr"])
-        return optimizer
-
-    def build_scheduler(self, optimizer):
-        # 1. Scheduler type
-        # It uses torch.optim.lr_scheduler.MultiStepLR, which reduces the learning
-        # rate (LR) by a factor (gamma) at specific training steps (called milestones)
-
-        # 2. Milestones
-        # This means the LR will drop twice:
-        # First at 50% of decay_steps
-        # Then at 90% of decay_steps
-        # Example: if decay_steps = 100000, milestones = [50000, 90000].
-
-        # 3. Gamma factor
-        # At each milestone, the LR is multiplied by 0.1 (reduced by 10×).
-        # Example: if LR starts at 0.001,
-        # at step 50k → LR becomes 0.0001
-        # at step 90k → LR becomes 0.00001.
-
-        # 4. Effect
-        # This creates a piecewise-constant decay schedule:
-        # LR stays constant in between milestones.
-        # At the milestone steps, LR suddenly drops.
-
-        scheduler_param = {
-            "milestones": [
-                np.floor(hparams["decay_steps"] * 0.5),
-                np.floor(hparams["decay_steps"] * 0.9),
-            ],
-            "gamma": 0.1,
-        }
-        return torch.optim.lr_scheduler.MultiStepLR(optimizer, **scheduler_param)

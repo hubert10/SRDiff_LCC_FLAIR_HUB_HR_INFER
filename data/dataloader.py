@@ -112,38 +112,30 @@ class FLAIRDataSet(Dataset):
             if active
         }
 
-    def crop_then_upsample_sits_image(self, input_tensor: torch.Tensor) -> torch.Tensor:
+    def upsample_sits_image(self, input_tensor: torch.Tensor) -> torch.Tensor:
         """
-        Crops the center of the input satellite image and then upsamples it.
-
         Args:
         - input_tensor (torch.Tensor): Tensor of shape (C, H, W), e.g., (3, 10, 10).
-        - upsample_factor (int): Upsampling factor, e.g., 10 → (10x spatial resolution).
+        - upsample_factor (int): Upsampling factor, e.g., 6.4 → (6.4x spatial resolution).
 
         Returns:
-        - torch.Tensor: Cropped and upsampled tensor of shape (C, up_H, up_W), e.g.,
-          (3, 100, 100)
+        - torch.Tensor: upsampled tensor of shape (C, up_H, up_W), e.g.,
+          (3, 64, 64)
         """
         # Ensure 3D shape (C, H, W)
         assert input_tensor.ndim == 3, "Input tensor must be (C, H, W)"
 
-        # Step 1: Crop the center region (1/4th spatial extent)
-        H, W = input_tensor.shape[1:]
-        crop_h, crop_w = H // 4, W // 4
-        center_crop = T.CenterCrop((crop_h, crop_w))
-        cropped_tensor = center_crop(input_tensor)  # shape: (C, crop_h, crop_w)
-
-        # Step 2: Add batch dimension for interpolation
-        cropped_tensor = cropped_tensor.unsqueeze(0)  # shape: (1, C, h, w)
+        # Add a batch dimension before interpolation (Shape: (1, C, H, W))
+        input_tensor = input_tensor.unsqueeze(0)
 
         # Step 3: Upsample using bicubic interpolation
-        upsampled_tensor = F.interpolate(
-            cropped_tensor,
+        up_tensor = F.interpolate(
+            input_tensor,
             size=(64, 64),
             mode="bicubic",
             align_corners=False,
         )
-        return upsampled_tensor.squeeze(0)  # shape: (C, up_H, up_W)
+        return up_tensor.squeeze(0)  # shape: (C, up_H, up_W)
 
     def downsample_single_label_map_majority_vote(self, label: torch.Tensor):
         """
@@ -361,7 +353,7 @@ class FLAIRDataSet(Dataset):
         img_lr_outs = []
 
         for i in range(img_lr.shape[0]):
-            img_lr_outs.append(self.crop_then_upsample_sits_image(img_lr[i, :, :, :]))
+            img_lr_outs.append(self.upsample_sits_image(img_lr[i, :, :, :]))
         # torch.Size([2, 3, 40, 40]): T=2, C=3, H=40, W=40
         img_lr_up = torch.stack(img_lr_outs, 0)
         ind = np.argmin(np.abs(batch["dates"]))

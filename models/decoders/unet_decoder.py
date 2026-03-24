@@ -12,9 +12,6 @@ from typing import Type, Callable, Tuple, Optional, Set, List, Union
 import timm
 import torch, os
 import torch.nn as nn
-from timm.models._efficientnet_blocks import SqueezeExcite, DepthwiseSeparableConv
-from timm.layers import drop_path, trunc_normal_, Mlp, DropPath
-import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, repeat
 import torch.utils.checkpoint as checkpoint
@@ -583,23 +580,6 @@ class UNetDecoder(nn.Module):
             Conv(decoder_channels, num_classes, kernel_size=1),
         )
         self.init_weight()
-
-    # def forward(self, res0, res1, res2, res3, h, w):
-
-    #     x = self.b3(self.pre_conv(res3))
-
-    #     x = self.p2(x, res2)
-    #     x = self.b2(x)
-
-    #     x = self.p1(x, res1)
-    #     x = self.b1(x)
-
-    #     x = self.p0(x, res0)
-
-    #     x = self.segmentation_head(x)  # torch.Size([4, 64, 256, 256])
-    #     print("self.segmentation_head(x):", x.shape)
-    #     x = F.interpolate(x, size=(h, w), mode="bilinear", align_corners=False)
-    #     return x
 
     def forward(self, res0, res1, res2, res3, h, w):
         enc_features = [res0, res1, res2]  # list to collect features
