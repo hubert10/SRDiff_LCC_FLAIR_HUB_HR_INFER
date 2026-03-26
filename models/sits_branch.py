@@ -87,7 +87,6 @@ class SITSSegmenter(nn.Module):
     def forward(self, x, batch_positions=None):
         # print("Swin Segmentation inputs:", x.shape)
         # x_enc = self.backbone(x, batch_positions)
-        h, w = x.size()[-2:]
         red_temp_feats, enc_temp_feats = self.sits_encoder(x, batch_positions)
         
         # print("backbone_dims:", self.backbone_dims)

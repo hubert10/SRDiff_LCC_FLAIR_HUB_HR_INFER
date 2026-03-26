@@ -35,6 +35,4 @@ style_interp: false
 save_intermediate: false
 show_training_process: false
 print_arch: false
-
-fix_cond_net_parms: true # freeze cond_net params during denoiser training
 use_aux_loss: true # use auxiliary losses

@@ -16,6 +16,14 @@ from torchvision.transforms.functional import InterpolationMode
 import torch.nn.functional as F
 from PIL import Image
 from data.data_display import convert_to_color, lut_colors
+from utils.hparams import hparams, set_hparams
+
+
+try:
+    DATA_DIR = os.environ["DATA_DIR"] + "/"
+    # DATA_DIR = "/my_data"
+except Exception:
+    DATA_DIR = "D:\kanyamahanga\Datasets"
 
 
 def load_hr_raster(img_id, rel_path, img_root):
@@ -32,15 +40,29 @@ def load_hr_raster(img_id, rel_path, img_root):
     - profile: rasterio profile (metadata)
     - path: full path to the mask
     """
-    img_filename = f"IMG_{img_id}.tif"
-    img_path = os.path.join(img_root, rel_path, "img", img_filename)
+    # img_filename = f"{img_id}".replace(".png", "tif").replace()
+    input_path = os.path.join(rel_path,  img_id)
 
-    if not os.path.exists(img_path):
-        raise FileNotFoundError(f"IMG file not found: {img_path}")
+    print("++++++++++input_path+++++++++++++:", input_path)
 
-    with rasterio.open(img_path, "r") as f:
-        img = f.read([1, 2, 3]).swapaxes(0, 2).swapaxes(0, 1)
-    return img
+    # Extract base parts
+    folder = input_path.split(os.sep)[0]              # D083-2021
+    filename = os.path.basename(input_path)           # IMG_UU-S1-24_4-2.png
+
+    # Remove prefix and extension
+    core = filename.replace("IMG_", "").replace(".png", "")  # UU-S1-24_4-2
+
+    tile = core.split("_")[0]   # UU-S1-24
+
+    # Construct output path
+    image_path = f"FLAIR_HUB_TOY/{folder}_AERIAL_RGBI/{tile}/{folder}_AERIAL_RGBI_{core}.tif"
+
+    print("++++++++++img_path+++++++++++++:", image_path)
+    # FLAIR_HUB_TOY/D038-2021_AERIAL_LABEL-COSIA/UU-S1-24/D038-2021_AERIAL_LABEL-COSIA_UU-S1-24_4-2.tif
+    channels = [1,2,3] 
+    with rasterio.open(os.path.join(DATA_DIR, image_path)) as src_img:
+        array = src_img.read(channels) if channels else src_img.read()
+    return array
 
 
 def load_mask_raster(img_id, rel_path, msk_root):
@@ -57,19 +79,28 @@ def load_mask_raster(img_id, rel_path, msk_root):
     - profile: rasterio profile (metadata)
     - path: full path to the mask
     """
-    msk_filename = f"MSK_{img_id}.tif"
-    msk_path = os.path.join(msk_root, rel_path, "msk", msk_filename)
+    input_path = os.path.join(rel_path,  img_id)
 
-    if not os.path.exists(msk_path):
-        raise FileNotFoundError(f"Mask file not found: {msk_path}")
+    print("++++++++++input_path+++++++++++++:", input_path)
 
-    with rasterio.open(msk_path, "r") as f:
-        mk = f.read([1])
-        print("mk:", mk.shape)
+    # Extract base parts
+    folder = input_path.split(os.sep)[0]              # D083-2021
+    filename = os.path.basename(input_path)           # IMG_UU-S1-24_4-2.png
 
-    mask = torch.as_tensor(mk, dtype=torch.int32)
-    print("mask:", mask.shape)
-    return mask
+    # Remove prefix and extension
+    core = filename.replace("IMG_", "").replace(".png", "")  # UU-S1-24_4-2
+
+    tile = core.split("_")[0]   # UU-S1-24
+
+    # Construct output path
+    image_path = f"FLAIR_HUB_TOY/{folder}_AERIAL_LABEL-COSIA/{tile}/{folder}_AERIAL_LABEL-COSIA_{core}.tif"
+
+    print("++++++++++img_path+++++++++++++:", image_path)
+    # FLAIR_HUB_TOY/D038-2021_AERIAL_LABEL-COSIA/UU-S1-24/D038-2021_AERIAL_LABEL-COSIA_UU-S1-24_4-2.tif
+    channels = [1] 
+    with rasterio.open(os.path.join(DATA_DIR, image_path)) as src_img:
+        array = src_img.read(channels) if channels else src_img.read()
+    return  torch.tensor(array)
 
 
 def downsample_majority_vote_no_crop(labels, scale_factor=8):
@@ -114,22 +145,26 @@ def plot_random_hr_lr_sr(hr_root, lr_root, sr_root):
         return
 
     hr_img_path = random.choice(hr_images)
-    print(f"Selected HR image: {hr_img_path}")
+    # print(f"Selected HR image: {hr_img_path}")
 
     # Step 2: Extract ID and corresponding LR/SR folders
     base_name = os.path.basename(hr_img_path)  # e.g., IMG_077413.png
-    img_id = base_name.split("_")[-1].split(".")[0]  # '077413'
+    img_id = base_name #.split("_")[-1].split(".")[0]  # '077413'
 
     # Get the relative path after HR root (e.g., D015_2020/Z1_AA)
     rel_path = os.path.relpath(os.path.dirname(os.path.dirname(hr_img_path)), hr_root)
 
-    lr_folder = os.path.join(lr_root, rel_path, "sen", img_id)
-    sr_folder = os.path.join(sr_root, rel_path, "sen", img_id)
+    lr_folder = os.path.join(lr_root, rel_path, "sen", img_id.replace("IMG_", "").replace(".png", ""))
+    sr_folder = os.path.join(sr_root, rel_path, "sen", img_id.replace("IMG_", "").replace(".png", ""))
+
 
     # Step 3: Load images
     hr_img = load_hr_raster(img_id, rel_path, img_root_folder)
-
+    hr_img = np.transpose(hr_img, (1, 2, 0))
     down_hr_img = cv2.imread(hr_img_path)
+
+    # print(f"down_hr_img: {hr_img_path}")
+
     down_hr_img = (
         cv2.cvtColor(down_hr_img, cv2.COLOR_BGR2RGB)
         if down_hr_img is not None
@@ -138,23 +173,23 @@ def plot_random_hr_lr_sr(hr_root, lr_root, sr_root):
 
     # Load masks
     msk = load_mask_raster(img_id, rel_path, msk_root_folder)
-    print(" before downsample:", msk.shape)
+    # print(" before downsample:", msk.shape)
     down_msk = downsample_majority_vote_no_crop(msk)
 
     msk_color = convert_to_color(msk[0], palette=lut_colors)
     down_msk_color = convert_to_color(down_msk[0], palette=lut_colors)
 
-    print("HR image:", hr_img.shape)
-    print("HR mask:", msk.shape)
-    print("Downsampled HR image:", down_hr_img.shape)
-    print("Downsampled mask:", down_msk_color.shape)
+    # print("HR image:", hr_img.shape)
+    # print("HR mask:", msk.shape)
+    # print("Downsampled HR image:", down_hr_img.shape)
+    # print("Downsampled mask:", down_msk_color.shape)
 
     # Load LR and SR images
-    lr_imgs = sorted(glob(os.path.join(lr_folder, "*.png")))
-    sr_imgs = sorted(glob(os.path.join(sr_folder, "*.png")))
+    lr_imgs = sorted(glob(os.path.join(lr_folder, "*.png")))[:4]
+    sr_imgs = sorted(glob(os.path.join(sr_folder, "*.png")))[:4]
 
-    print(f"Selected LR image: {lr_imgs}")
-    print(f"Selected SR image: {sr_imgs}")
+    # print(f"Selected LR image: {lr_imgs}")
+    # print(f"Selected SR image: {sr_imgs}")
 
     lr_images = [cv2.cvtColor(cv2.imread(f), cv2.COLOR_BGR2RGB) for f in lr_imgs]
     sr_images = [cv2.cvtColor(cv2.imread(f), cv2.COLOR_BGR2RGB) for f in sr_imgs]
@@ -177,6 +212,11 @@ def plot_random_hr_lr_sr(hr_root, lr_root, sr_root):
 
     # Row 1: LR
     for i, img in enumerate(lr_images):
+        # print("--------------img-----------:", img.shape)
+        # min_val = np.min(img)
+        # max_val = np.max(img)
+        # print(min_val, max_val)
+        
         axs[1, i].imshow(img)
         axs[1, i].axis("off")
         axs[1, i].set_title(f"LR {i}")
@@ -185,6 +225,8 @@ def plot_random_hr_lr_sr(hr_root, lr_root, sr_root):
 
     # Row 2: SR
     for i, img in enumerate(sr_images):
+        # print("--------------img-----------:", img.shape)
+
         axs[2, i].imshow(img)
         axs[2, i].axis("off")
         axs[2, i].set_title(f"SR {i}")
@@ -200,9 +242,13 @@ def plot_random_hr_lr_sr(hr_root, lr_root, sr_root):
 root_folder = (
     "D:\\kanyamahanga\\Bigwork\\SRDiff_LCC_FLAIR_HUB_HR_INFER\\"
 )
+root_folder = "C:\\Users\\kanyamahanga\\Desktop\\IPI-128\\RESEARCH\\Journal_Paper\\SRDiff_LCC_FLAIR_HUB_HR_INFER\\results\\checkpoints\\misr\\srdiff_maxvit_ltae_ckpt\\results_0_\\"
 
-img_root_folder = "D:\\kanyamahanga\\Datasets\\FLAIR\\flair_aerial_test\\"
-msk_root_folder = "D:\\kanyamahanga\\Datasets\\FLAIR\\flair_labels_test\\"
+img_root_folder = "D:\\kanyamahanga\\Datasets\\FLAIR_HUB_TOY\\"
+msk_root_folder = "D:\\kanyamahanga\\Datasets\\FLAIR_HUB_TOY\\"
+
+# val_csv: D:\\kanyamahanga\\Datasets\\FLAIR_HUB_TOY\\ALL_CSV\\FLAIR_HUB_DATASET_VALID.csv
+# test_csv: D:\\kanyamahanga\\Datasets\\FLAIR_HUB_TOY\\ALL_CSV\\FLAIR_HUB_DATASET_TEST.csv
 
 plot_random_hr_lr_sr(
     hr_root=root_folder + "HR", lr_root=root_folder + "LR", sr_root=root_folder + "SR"

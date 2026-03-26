@@ -1,5 +1,3 @@
-import numpy as np
-import torch
 from typing import Dict
 from torch.utils.data import Dataset
 from data.utils_data.io import read_patch
@@ -128,7 +126,7 @@ class FLAIRDataSet(Dataset):
         # Add a batch dimension before interpolation (Shape: (1, C, H, W))
         input_tensor = input_tensor.unsqueeze(0)
 
-        # Step 3: Upsample using bicubic interpolation
+        # Upsample using bicubic interpolation
         up_tensor = F.interpolate(
             input_tensor,
             size=(64, 64),
@@ -136,6 +134,12 @@ class FLAIRDataSet(Dataset):
             align_corners=False,
         )
         return up_tensor.squeeze(0)  # shape: (C, up_H, up_W)
+
+    def sat_scale_norm(self, img_lr):
+        # scale to [0, 1] and normalize to [-1, 1]
+        scaled_img_lr = img_lr / 2_000
+        scaled_img_lr = torch.clamp(scaled_img_lr, 0, 1)
+        return 2 * scaled_img_lr - 1
 
     def downsample_single_label_map_majority_vote(self, label: torch.Tensor):
         """
@@ -335,6 +339,20 @@ class FLAIRDataSet(Dataset):
             )
             for k, v in batch.items()
         }
+
+        # print("---------------------s2_dates---------------------:",  s2_dates)
+
+        from datetime import datetime
+        # Convert all items to datetime objects (if not already), then format them
+        dates = [
+            (
+                date_sen2
+                if isinstance(date_sen2, datetime)
+                else datetime.strptime(date_sen2, "%Y-%m-%d")
+            ).strftime("%Y-%m-%d")
+            for date_sen2 in s2_dates
+        ]
+
         rename_map = {
             "AERIAL_RGBI": "img",
             "DEM_ELEV": "dem_elev",
@@ -343,18 +361,22 @@ class FLAIRDataSet(Dataset):
             "SENTINEL2_DATES": "dates",
             "SPOT6_DATE": "spot_date",
             "AERIAL_LABEL-COSIA": "labels",
-            # 'ID_AERIAL_LABEL-COSIA' stays the same
         }
         batch = {rename_map.get(k, k): v for k, v in batch.items()}
         # we use the positional encoding of the dates as proposed in the paper
         # create a new dict with renamed keys
-        img_lr = batch["img_lr"]
         img = self.combine_hr_and_dem(batch["img"], batch["dem_elev"])
+
+        img_lr = batch["img_lr"]
         img_lr_outs = []
+
+        # Normalize the SITS bands as it not done like other data
+        img_lr = self.sat_scale_norm(img_lr)
 
         for i in range(img_lr.shape[0]):
             img_lr_outs.append(self.upsample_sits_image(img_lr[i, :, :, :]))
         # torch.Size([2, 3, 40, 40]): T=2, C=3, H=40, W=40
+        
         img_lr_up = torch.stack(img_lr_outs, 0)
         ind = np.argmin(np.abs(batch["dates"]))
         # Match the ground truth radiometry to the reference low resolution input
@@ -364,11 +386,11 @@ class FLAIRDataSet(Dataset):
 
         # cropping the ground truth images
         labels_sr = self.downsample_single_label_map_majority_vote(labels).long()
-
+        batch["img_lr"] = img_lr
+        batch["img"] = img
         batch["img_lr_up"] = img_lr_up
         batch["closest_idx"] = ind
         batch["labels_sr"] = labels_sr
-        batch["img"] = img
-
-        # TODO: CHECK THE FORMAT OF  batch["dates_encoding"]
+        batch["dates"] = dates # added for saving time series images during inference
+        # TODO: CHECK THE FORMAT OF batch["dates_encoding"]
         return batch

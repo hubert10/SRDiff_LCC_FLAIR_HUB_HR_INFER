@@ -1,6 +1,5 @@
 import sys
 import numpy as np
-
 from skimage import img_as_float
 
 

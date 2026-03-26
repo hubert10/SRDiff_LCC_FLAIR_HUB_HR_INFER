@@ -257,7 +257,7 @@ class GaussianDiffusion(nn.Module):
         # cond: extracted temporal features from the low-resolution image
         # encoded with HighResnet-LTAE temporal encoder
 
-        cond_net_out, _, _, cond = self.cond_net(img_lr, dates)
+        _, _, _, cond = self.cond_net(img_lr, dates)
 
         # print("cond 0:", cond[0].shape)
         # print("cond 1:", cond[1].shape)
@@ -273,34 +273,13 @@ class GaussianDiffusion(nn.Module):
         # img_lr_up: shape (B, T, C, H, W) where T is the number of time steps
 
         p_losses, x_tp1, noise_pred, x_t, x_t_gt, x_0 = self.p_losses(
-            x, t, cond, img_lr, img_lr_up, labels, closest_idx, dates, *args, **kwargs
+            x, t, cond, img_lr, img_lr_up,  closest_idx,  *args, **kwargs
         )
         # p_losses: main loss computed based on the predicted noise and the ground truth noise
         ret = {"sr": p_losses}
 
         # If the cond_net parameters are not froozen, apply auxiliary losses
         # to the output of the cond_net (RRDB) to refine the features
-
-        if not hparams["fix_cond_net_parms"]:
-            if hparams["aux_l1_loss"]:
-                ret["aux_l1"] = (
-                    hparams["px_loss_weight"]
-                    * pixel_wise_closest_sr_sits_aer_loss(
-                        cond_net_out, img_hr, closest_idx
-                    )
-                    + hparams["grad_px_loss_weight"]
-                    * grad_pixel_wise_closest_sr_sits_aer_loss(
-                        cond_net_out, img_hr, closest_idx
-                    )
-                    + hparams["temp_grad_mag_loss_weight"]
-                    * temp_consistency_gradient_magnitude_loss(cond_net_out)
-                    + hparams["gray_value_px_loss_weight"]
-                    * gray_value_consistency_loss(cond_net_out, img_lr)
-                )
-            if hparams["aux_ssim_loss"]:
-                ret["aux_ssim"] = 1 - self.ssim_loss(cond_net_out, img_hr)
-            if hparams["aux_percep_loss"]:
-                ret["aux_percep"] = self.percep_loss_fn[0](img_hr, cond_net_out)
 
         # return ret: loss dict (noise diffusion loss + auxiliary losses)
         # predicted SR image (x_tp1) at  currenttimestep t
@@ -309,7 +288,7 @@ class GaussianDiffusion(nn.Module):
         return ret, (x_tp1, x_t_gt, x_t), t, x_0
 
     def p_losses(
-        self, img_hr, t, cond, img_lr, img_lr_up, labels, closest_idx, dates, noise=None
+        self, img_hr, t, cond, img_lr, img_lr_up, closest_idx, noise=None
     ):
         # The auxiliary loss function is introduced here because
         # this is where the denoising process is performed and the
@@ -412,6 +391,13 @@ class GaussianDiffusion(nn.Module):
                 * gray_value_consistency_loss(x0_pred, img_lr)
             )
             final_loss = hparams["main_loss_weight"] * loss + aux_loss
+        
+        print("loss:", loss)
+        print("pixel_wise_closest_sr_sits_aer_loss:", pixel_wise_closest_sr_sits_aer_loss(x0_pred, img_hr, closest_idx))
+        print("grad_pixel_wise_closest_sr_sits_aer_loss:", grad_pixel_wise_closest_sr_sits_aer_loss(x0_pred, img_hr, closest_idx))
+        print("temp_consistency_gradient_magnitude_loss:", temp_consistency_gradient_magnitude_loss(x0_pred))
+        print("gray_value_consistency_loss:", gray_value_consistency_loss(x0_pred, img_lr))
+
         return final_loss, x_tp1_gt, noise_pred, x_t_pred, x_t_gt, x0_pred
 
     def shift_l1_loss(self, y_true, y_pred, border=3):
@@ -636,7 +622,6 @@ class GaussianDiffusion(nn.Module):
     # instead of the full high-resolution image.
 
     def res2img(self, img_, img_lr_up, clip_input=None):
-        img_ = img_[:, :4, :, :]
         if clip_input is None:
             clip_input = hparams["clip_input"]
         if hparams["res"]:
@@ -655,7 +640,6 @@ class GaussianDiffusion(nn.Module):
         # x: torch.Size([5, 3, 40, 40])
         # img_lr_up: torch.Size([5, 2, 3, 40, 40])
 
-        x = x[:, :4, :, :]
         if clip_input is None:
             clip_input = hparams["clip_input"]
         if hparams["res"]:

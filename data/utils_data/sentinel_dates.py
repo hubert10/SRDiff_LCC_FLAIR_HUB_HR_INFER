@@ -5,6 +5,14 @@ import json
 from typing import Dict, Tuple, Any, Set
 
 
+# Agricultural and land cover classification often depends on seasonal changes.
+#  In many parts of the world, May 15th could be a crucial date because it might
+#  represent the peak of a particular growing season, a planting season, or a 
+# critical stage in crop development.
+# Remote sensing data (such as from SITS) often captures land cover changes 
+# throughout the year, and May 15th might represent an average or key point in the seasonal cycle for the crops or vegetation types being studied.
+
+
 def prepare_sentinel_dates(
     config: Dict[str, Any], file_path: str, patch_ids: Set[str]
 ) -> Dict[str, Dict[str, np.ndarray]]:

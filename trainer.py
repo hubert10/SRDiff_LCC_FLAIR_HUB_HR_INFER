@@ -12,6 +12,7 @@ import torch.distributed as dist
 from torch.utils.tensorboard import SummaryWriter
 from data.datamodule import FlairDataModule
 from utils.metrics import generate_miou, generate_mf1s, generate_metrics
+from utils.utils_dataset import save_image_to_nested_folder, save_hr_image_to_nested_folder
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "1"
 # sys.path.append('../')
@@ -348,6 +349,8 @@ class Trainer:
                 gen_dir = self.gen_dir
                 item_name = batch["item_name"]
                 img_hr = batch["img_hr"]
+                # img_hr = img_hr.permute(0, 2, 3, 1)
+                img = batch["img"]
                 img_lr = batch["img_lr"]
                 img_lr_up = batch["img_lr_up"]
                 dates = batch["dates"]
@@ -389,14 +392,16 @@ class Trainer:
                                 for im in img_sr.squeeze()
                             ]
 
+
                         for _, hr_g, lr, lr_up, pred, _ in zip(
                             img_sr, img_hr, img_lr, img_lr_up, preds, dates
                         ):
                             # Save high-resolution ground truth image
-                            # hr_g = Image.fromarray(hr_g[:, :, :4])
-                            # save_hr_image_to_nested_folder(
-                            #     hr_g, item_name, "HR", "img", None, base_dir=gen_dir
-                            # )
+                            
+                            hr_g = Image.fromarray(hr_g[:, :, :3])
+                            save_hr_image_to_nested_folder(
+                                hr_g, item_name[0], "HR", "img", None, base_dir=gen_dir
+                            )
 
                             # Save pixel-wise predictions
                             pred = pred.cpu().numpy().astype("uint8")
@@ -411,41 +416,41 @@ class Trainer:
                                 f"{output_file}", compression="tiff_lzw"
                             )
 
-                            # if hparams["test_batch_size"] == 1:
-                            #     dates = [date for date in dates]
+                            if hparams["test_batch_size"] == 1:
+                                dates = [date for date in dates]
 
-                            #     lr = [Image.fromarray(im[0]) for im in img_lr]
-                            #     for e, (im, date) in enumerate(zip(lr, dates[0])):
-                            #         save_image_to_nested_folder(
-                            #             im,
-                            #             item_name,
-                            #             "LR",
-                            #             "sen",
-                            #             f"{e}_{date}",
-                            #             base_dir=gen_dir,
-                            #         )
+                                lr = [Image.fromarray(im[0]) for im in img_lr]
+                                for e, (im, date) in enumerate(zip(lr, dates[0])):
+                                    save_image_to_nested_folder(
+                                        im,
+                                        item_name[0],
+                                        "LR",
+                                        "sen",
+                                        f"{e}_{date}",
+                                        base_dir=gen_dir,
+                                    )
 
-                            #     lr_up = [Image.fromarray(im[0]) for im in img_lr_up]
-                            #     for e, (im, date) in enumerate(zip(lr_up, dates[0])):
-                            #         save_image_to_nested_folder(
-                            #             im,
-                            #             item_name,
-                            #             "UP",
-                            #             "sen",
-                            #             f"{e}_{date}",
-                            #             base_dir=gen_dir,
-                            #         )
+                                lr_up = [Image.fromarray(im[0]) for im in img_lr_up]
+                                for e, (im, date) in enumerate(zip(lr_up, dates[0])):
+                                    save_image_to_nested_folder(
+                                        im,
+                                        item_name[0],
+                                        "UP",
+                                        "sen",
+                                        f"{e}_{date}",
+                                        base_dir=gen_dir,
+                                    )
 
-                            #     sr = [Image.fromarray(im[0]) for im in img_sr]
-                            #     for e, (im, date) in enumerate(zip(sr, dates[0])):
-                            #         save_image_to_nested_folder(
-                            #             im,
-                            #             item_name,
-                            #             "SR",
-                            #             "sen",
-                            #             f"{e}_{date}",
-                            #             base_dir=gen_dir,
-                            #         )
+                                sr = [Image.fromarray(im[0]) for im in img_sr]
+                                for e, (im, date) in enumerate(zip(sr, dates[0])):
+                                    save_image_to_nested_folder(
+                                        im,
+                                        item_name[0],
+                                        "SR",
+                                        "sen",
+                                        f"{e}_{date}",
+                                        base_dir=gen_dir,
+                                    )
 
             self.results = {
                 k: self.results[k]

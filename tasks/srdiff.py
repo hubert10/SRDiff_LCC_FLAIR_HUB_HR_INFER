@@ -139,7 +139,6 @@ class SRDiffTrainer(Trainer):
         labels_sr = batch["labels_sr"]  # torch.Size([4, 2, 3, 64, 64])
         dates = batch["dates_encoding"]
         closest_idx = batch["closest_idx"]  # torch.Size([4, 2, 3, 64, 64])
-        sc_img_hr = img_hr[:, :4, :, :]
 
         # print("img_hr:", img_hr.shape)
         # print("dem_elev:", dem_elev.shape)
@@ -155,7 +154,7 @@ class SRDiffTrainer(Trainer):
         # call gaussian diffusion model for SR-prediction this should also
         # return the SR-SITS images alongside the diffusion losses
         losses, _, _, img_sr = self.model.gaussian(
-            sc_img_hr,
+            img_hr,
             img_lr,
             img_lr_up,
             labels_sr,
@@ -229,13 +228,12 @@ class SRDiffTrainer(Trainer):
         labels = sample["labels"]
         dates = sample["dates_encoding"]
         closest_idx = sample["closest_idx"]  # torch.Size([4, 2, 3, 160, 160])
-        sc_img_hr = img_hr[:, :4, :, :]
 
         img_sr, rrdb_out = self.model.gaussian.sample(
             img, # HR image for conditioning
             img_lr,
             img_lr_up,
-            sc_img_hr,
+            img_hr,
             dates=dates,
             config=self.config,
         )
@@ -255,7 +253,7 @@ class SRDiffTrainer(Trainer):
         for b in range(img_sr.shape[0]):
             s = self.measure.measure(
                 img_sr[b][int(closest_idx[b].item()), :, :, :],  # SR image at t
-                sc_img_hr[b],  # reference HR image
+                img_hr[b],  # reference HR image
                 img_lr[b][int(closest_idx[b].item()), :, :, :],  # LR input at t
                 preds[b],
                 labels[b],

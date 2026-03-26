@@ -371,45 +371,6 @@ def moment(sen2, aerial, max_s2_images=None):
     return aerial
 
 
-def save_image_to_nested_folder(
-    img, image_path, folder, sensor, timestamp=None, base_dir="."
-):
-    """
-    Splits the given image path and saves the image into
-    a nested folder structure.
-
-    Args:
-        image_path (str): Original image path string
-        (e.g., 'D008_2019/Z13_UA/img/IMG_006512.tif')
-        base_dir (str): Base directory where folders
-        should be created (default is current directory)
-
-    Returns:
-        str: The final path where the image is saved
-    """
-
-    # Step-by-step parsing
-    parts = image_path.split("/")
-    first_folder = parts[0]
-    second_folder = parts[1]
-    # filename = parts[-1].replace('IMG', 'SEN2').replace('.tif', '.png')
-    filename = str(first_folder) + "-" + str(second_folder) + ".png"
-
-    # Create folder structure
-    target_dir = os.path.join(
-        base_dir, str(folder), first_folder, second_folder, str(sensor)
-    )
-    os.makedirs(target_dir, exist_ok=True)
-
-    # Save image
-    if timestamp is None:
-        img.save(f"{target_dir}/{filename}")
-    else:
-        img.save(f"{target_dir}/{timestamp}-{filename}")
-    save_path = os.path.join(target_dir, filename)
-    return save_path
-
-
 def save_hr_image_to_nested_folder(
     img, image_path, folder, sensor, timestamp=None, base_dir="."
 ):
@@ -429,17 +390,16 @@ def save_hr_image_to_nested_folder(
 
     # Step-by-step parsing
     parts = image_path.split("/")
-    first_folder = parts[0]
     second_folder = parts[1]
     last_folder = parts[-1]
 
     # filename = parts[-1].replace('IMG', 'SEN2').replace('.tif', '.png')
     # filename = str(first_folder) + "-" + str(second_folder) + str(last_folder).replace(".tif", ".png")
-    filename = str(last_folder).replace(".tif", ".png")
+    filename =  f"IMG_{last_folder.split('LABEL-COSIA_')[-1].replace('.tif', '.png')}"
 
     # Create folder structure
     target_dir = os.path.join(
-        base_dir, str(folder), first_folder, second_folder, str(sensor)
+        base_dir, str(folder), second_folder.split("_")[0], str(sensor)
     )
     os.makedirs(target_dir, exist_ok=True)
     # os.makedirs(os.path.dirname(target_dir), exist_ok=True)
@@ -462,7 +422,7 @@ def save_image_to_nested_folder(
 
     Args:
         image_path (str): Original image path string
-        (e.g., 'D008_2019/Z13_UA/img/IMG_006512.tif')
+        (e.g., 'D012-2019_AERIAL_LABEL-COSIA_AF-S1-27_5-10.tif')
         base_dir (str): Base directory where folders
         should be created (default is current directory)
 
@@ -471,8 +431,9 @@ def save_image_to_nested_folder(
     """
 
     # Step-by-step parsing
+    
+    
     parts = image_path.split("/")
-    first_folder = parts[0]
     second_folder = parts[1]
     last_folder = parts[-1]
 
@@ -484,11 +445,15 @@ def save_image_to_nested_folder(
     target_dir = os.path.join(
         base_dir,
         str(folder),
-        first_folder,
-        second_folder,
+        second_folder.split("_")[0],
         str(sensor),
-        str(last_folder.split("_")[1].split(".")[0]),
+        str(last_folder.split("LABEL-COSIA_")[-1].replace(".tif", "")),
     )
+    # print("0:", second_folder)
+    # print("1:", target_dir)
+    # print("2", second_folder.split("_")[0])
+    # print("3:", str(last_folder.split("LABEL-COSIA_")[-1].replace(".tif", "")))
+
     os.makedirs(target_dir, exist_ok=True)
     # os.makedirs(os.path.dirname(target_dir), exist_ok=True)
 

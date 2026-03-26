@@ -68,13 +68,13 @@ def compute_gradient(img):
         [[-1.0, 0.0, 1.0], [-2.0, 0.0, 2.0], [-1.0, 0.0, 1.0]],
         device=img.device,
         dtype=img.dtype,
-    ).reshape(1, 1, 3, 3)
+    ).reshape(1, 1, 3, 3) / 8
 
     sobel_y = torch.tensor(
         [[-1.0, -2.0, -1.0], [0.0, 0.0, 0.0], [1.0, 2.0, 1.0]],
         device=img.device,
         dtype=img.dtype,
-    ).reshape(1, 1, 3, 3)
+    ).reshape(1, 1, 3, 3) / 8
 
     B, C, H, W = img.shape
 
@@ -143,11 +143,11 @@ def compute_gradient_magnitude(image):
     # Define Sobel kernels
     sobel_x = torch.tensor([[-1.0, 0.0, 1.0], [-2.0, 0.0, 2.0], [-1.0, 0.0, 1.0]]).view(
         1, 1, 3, 3
-    )
+    ) / 8
 
     sobel_y = torch.tensor([[-1.0, -2.0, -1.0], [0.0, 0.0, 0.0], [1.0, 2.0, 1.0]]).view(
         1, 1, 3, 3
-    )
+    ) / 8
 
     # Repeat kernels for depthwise conv (1 per channel)
     sobel_x = sobel_x.repeat(C, 1, 1, 1).to(image.device)
@@ -213,9 +213,9 @@ def gray_value_consistency_loss(
 
     Args:
         img_sr (torch.Tensor): Super-resolved image sequence of shape
-          (B, T, C, H, W): (B, T, C, 100, 100)
+          (B, T, C, H, W): (B, T, C, 64, 64)
         img_lr (torch.Tensor): Low-resolution image sequence of shape
-        (B, T, C, h, w): (B, T, C, 40, 40)
+        (B, T, C, h, w): (B, T, C, 10, 10)
           to (default: 100x100)
 
     Returns:

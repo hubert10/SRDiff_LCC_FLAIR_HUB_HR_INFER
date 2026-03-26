@@ -119,8 +119,6 @@ class SITSAerialSegmenter(nn.Module):
         # Aerial branch
         hr_0, hr_1, hr_2, hr_3, hr_4 = self.aerial_net(img)
 
-        # print("img:", img.shape)
-
         # SITS branch
         sits_logit, multi_lvls_cls, red_temp_feats, _ = self.sits_network(img_sr, dates)
         # print()
