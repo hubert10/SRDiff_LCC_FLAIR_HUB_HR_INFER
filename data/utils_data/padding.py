@@ -55,7 +55,7 @@ def pad_collate_flair(sample_dict, pad_value=0):
     - dict: A dictionary with padded tensors and original string keys.
     """
 
-    TO_PAD_KEYS = ["img_lr", "img_lr_up", "dates", "dates_encoding"]
+    TO_PAD_KEYS = ["img_lr", "img_lr_up", "dates_encoding"]
 
     batch = {}
 

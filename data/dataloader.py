@@ -1,5 +1,3 @@
-import numpy as np
-import torch
 from typing import Dict
 from torch.utils.data import Dataset
 from data.utils_data.io import read_patch
@@ -112,38 +110,36 @@ class FLAIRDataSet(Dataset):
             if active
         }
 
-    def crop_then_upsample_sits_image(self, input_tensor: torch.Tensor) -> torch.Tensor:
+    def upsample_sits_image(self, input_tensor: torch.Tensor) -> torch.Tensor:
         """
-        Crops the center of the input satellite image and then upsamples it.
-
         Args:
         - input_tensor (torch.Tensor): Tensor of shape (C, H, W), e.g., (3, 10, 10).
-        - upsample_factor (int): Upsampling factor, e.g., 10 → (10x spatial resolution).
+        - upsample_factor (int): Upsampling factor, e.g., 6.4 → (6.4x spatial resolution).
 
         Returns:
-        - torch.Tensor: Cropped and upsampled tensor of shape (C, up_H, up_W), e.g.,
-          (3, 100, 100)
+        - torch.Tensor: upsampled tensor of shape (C, up_H, up_W), e.g.,
+          (3, 64, 64)
         """
         # Ensure 3D shape (C, H, W)
         assert input_tensor.ndim == 3, "Input tensor must be (C, H, W)"
 
-        # Step 1: Crop the center region (1/4th spatial extent)
-        H, W = input_tensor.shape[1:]
-        crop_h, crop_w = H // 4, W // 4
-        center_crop = T.CenterCrop((crop_h, crop_w))
-        cropped_tensor = center_crop(input_tensor)  # shape: (C, crop_h, crop_w)
+        # Add a batch dimension before interpolation (Shape: (1, C, H, W))
+        input_tensor = input_tensor.unsqueeze(0)
 
-        # Step 2: Add batch dimension for interpolation
-        cropped_tensor = cropped_tensor.unsqueeze(0)  # shape: (1, C, h, w)
-
-        # Step 3: Upsample using bicubic interpolation
-        upsampled_tensor = F.interpolate(
-            cropped_tensor,
+        # Upsample using bicubic interpolation
+        up_tensor = F.interpolate(
+            input_tensor,
             size=(64, 64),
             mode="bicubic",
             align_corners=False,
         )
-        return upsampled_tensor.squeeze(0)  # shape: (C, up_H, up_W)
+        return up_tensor.squeeze(0)  # shape: (C, up_H, up_W)
+
+    def sat_scale_norm(self, img_lr):
+        # scale to [0, 1] and normalize to [-1, 1]
+        scaled_img_lr = img_lr / 2_000
+        scaled_img_lr = torch.clamp(scaled_img_lr, 0, 1)
+        return 2 * scaled_img_lr - 1
 
     def downsample_single_label_map_majority_vote(self, label: torch.Tensor):
         """
@@ -343,6 +339,21 @@ class FLAIRDataSet(Dataset):
             )
             for k, v in batch.items()
         }
+
+        # print("---------------------s2_dates---------------------:",  s2_dates)
+
+        from datetime import datetime
+
+        # Convert all items to datetime objects (if not already), then format them
+        dates = [
+            (
+                date_sen2
+                if isinstance(date_sen2, datetime)
+                else datetime.strptime(date_sen2, "%Y-%m-%d")
+            ).strftime("%Y-%m-%d")
+            for date_sen2 in s2_dates
+        ]
+
         rename_map = {
             "AERIAL_RGBI": "img",
             "DEM_ELEV": "dem_elev",
@@ -351,18 +362,22 @@ class FLAIRDataSet(Dataset):
             "SENTINEL2_DATES": "dates",
             "SPOT6_DATE": "spot_date",
             "AERIAL_LABEL-COSIA": "labels",
-            # 'ID_AERIAL_LABEL-COSIA' stays the same
         }
         batch = {rename_map.get(k, k): v for k, v in batch.items()}
         # we use the positional encoding of the dates as proposed in the paper
         # create a new dict with renamed keys
-        img_lr = batch["img_lr"]
         img = self.combine_hr_and_dem(batch["img"], batch["dem_elev"])
+
+        img_lr = batch["img_lr"]
         img_lr_outs = []
 
+        # Normalize the SITS bands as it not done like other data
+        img_lr = self.sat_scale_norm(img_lr)
+
         for i in range(img_lr.shape[0]):
-            img_lr_outs.append(self.crop_then_upsample_sits_image(img_lr[i, :, :, :]))
+            img_lr_outs.append(self.upsample_sits_image(img_lr[i, :, :, :]))
         # torch.Size([2, 3, 40, 40]): T=2, C=3, H=40, W=40
+
         img_lr_up = torch.stack(img_lr_outs, 0)
         ind = np.argmin(np.abs(batch["dates"]))
         # Match the ground truth radiometry to the reference low resolution input
@@ -372,11 +387,11 @@ class FLAIRDataSet(Dataset):
 
         # cropping the ground truth images
         labels_sr = self.downsample_single_label_map_majority_vote(labels).long()
-
+        batch["img_lr"] = img_lr
+        batch["img"] = img
         batch["img_lr_up"] = img_lr_up
         batch["closest_idx"] = ind
         batch["labels_sr"] = labels_sr
-        batch["img"] = img
-
-        # TODO: CHECK THE FORMAT OF  batch["dates_encoding"]
+        batch["dates"] = dates  # added for saving time series images during inference
+        # TODO: CHECK THE FORMAT OF batch["dates_encoding"]
         return batch

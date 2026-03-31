@@ -32,6 +32,9 @@ temp_grad_mag_loss_weight: 0.2
 gray_value_px_loss_weight: 1.0
 
 
+timesteps: 500
+ddim_infer_steps: 20
+
 # 1. pixel: 1.0
 
 # Applies to: pixel_wise_closest_sr_sits_aer_loss(x0_pred, img_hr, closest_idx)
@@ -48,7 +51,7 @@ gray_value_px_loss_weight: 1.0
 
 # 3. temp: 0.2
 
-# Applies to: temp_consistency_gradient_magnitude_loss(x0_pred)
+# Applies to: temp_gradient_magnitude_consistency_loss(x0_pred)
 # Meaning: Ensures temporal smoothness across the SR satellite image time series by penalizing sudden changes in gradient magnitude between frames.
 # Weight 0.2: Smaller because temporal consistency is important but should not over-smooth, which could erase dynamic changes in the scene.
 

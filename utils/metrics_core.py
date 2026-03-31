@@ -13,7 +13,11 @@ def class_IoU(npcm: np.ndarray, n_class: int) -> tuple:
     """
     Calculate the Intersection over Union (IoU) for each class and the mean IoU.
     """
-    ious = 100 * np.diag(npcm) / (np.sum(npcm, axis=1) + np.sum(npcm, axis=0) - np.diag(npcm))
+    ious = (
+        100
+        * np.diag(npcm)
+        / (np.sum(npcm, axis=1) + np.sum(npcm, axis=0) - np.diag(npcm))
+    )
     ious[np.isnan(ious)] = 0
     return ious, np.mean(ious)
 

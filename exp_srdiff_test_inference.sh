@@ -16,5 +16,5 @@ export CONDA_ENVS_PATH=$HOME/.conda/envs
 export DATA_DIR=$BIGWORK
 conda activate flair_venv
 which python
-cd $HOME/SRDiff_LCC_FLAIR_HUB_HR_INFER
-srun python trainer.py --config configs/diffsr_maxvit_ltae.yaml --config_file flair-config-server.yml --exp_name misr/srdiff_highresnet_ltae_ckpt --hparams="cond_net_ckpt=/bigwork/nhgnkany/Results/SRDiff_LCC_FLAIR_HUB_HR_INFER/results/checkpoints/misr/srdiff_highresnet_ltae_ckpt" --infer
+cd $HOME/LDM_LCC_FLAIR_HUB_HR_INFER
+srun python trainer.py --config configs/diffsr_maxvit_ltae.yaml --config_file flair-config-server.yml --exp_name misr/srdiff_highresnet_ltae_ckpt --hparams="cond_net_ckpt=/bigwork/nhgnkany/Results/LDM_LCC_FLAIR_HUB_HR_INFER/results/checkpoints/misr/srdiff_highresnet_ltae_ckpt" --infer

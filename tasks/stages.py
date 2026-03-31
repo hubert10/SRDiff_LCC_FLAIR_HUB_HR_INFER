@@ -1,13 +1,11 @@
 import torch
 import os
 import datetime
-
 from datetime import timedelta
 from pathlib import Path
 from typing import Dict, Optional
 from collections import OrderedDict
 from pytorch_lightning import seed_everything
-
 from writer.prediction_writer import PredictionWriter
 from tasks.trainers import train, predict
 from models.checkpoint import load_checkpoint

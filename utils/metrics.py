@@ -9,12 +9,13 @@ import numpy as np
 import rasterio
 from data.utils_data.io import DATA_DIR
 from utils.metrics_core import (
-                                            class_IoU,
-                                            overall_accuracy,
-                                            class_precision,
-                                            class_recall,
-                                            class_fscore
+    class_IoU,
+    overall_accuracy,
+    class_precision,
+    class_recall,
+    class_fscore,
 )
+
 
 def generate_miou(hparams: str, path_truth: str, path_pred: str) -> list:
     #################################################################################################
@@ -156,11 +157,7 @@ def generate_mf1s(hparams, path_truth: str, path_pred: str) -> list:
 
 
 def compute_and_save_metrics(
-    confmat: np.ndarray,
-    config: Dict,
-    output_dir: str,
-    task: str,
-    mode: str = "predict"
+    confmat: np.ndarray, config: Dict, output_dir: str, task: str, mode: str = "predict"
 ) -> None:
     """
     Computes segmentation evaluation metrics from a confusion matrix and saves them to disk.
@@ -193,7 +190,7 @@ def compute_and_save_metrics(
         default_weights[i] = weight
 
     active_modalities = [
-        mod for mod, is_active in config['modalities']["inputs"].items() if is_active
+        mod for mod, is_active in config["modalities"]["inputs"].items() if is_active
     ]
     per_modality_exceptions = value_weights.get("per_modality_exceptions", {}) or {}
 
@@ -223,7 +220,13 @@ def compute_and_save_metrics(
     per_c_fscore, avg_fscore = class_fscore(per_c_precision, per_c_recall)
 
     metrics = {
-        "Avg_metrics_name": ["mIoU", "Overall Accuracy", "F-score", "Precision", "Recall"],
+        "Avg_metrics_name": [
+            "mIoU",
+            "Overall Accuracy",
+            "F-score",
+            "Precision",
+            "Recall",
+        ],
         "Avg_metrics": [avg_ious, ovr_acc, avg_fscore, avg_precision, avg_recall],
         "classes": class_names_cleaned,
         "per_class_iou": list(per_c_ious),
@@ -234,7 +237,9 @@ def compute_and_save_metrics(
         "per_class_modality_weights": modality_weights_cleaned,
     }
 
-    out_folder_metrics = Path(output_dir, f"metrics_{config['paths']['out_model_name']}", task)
+    out_folder_metrics = Path(
+        output_dir, f"metrics_{config['paths']['out_model_name']}", task
+    )
     out_folder_metrics.mkdir(exist_ok=True, parents=True)
     np.save(out_folder_metrics / f"confmat_{mode}.npy", confmat)
     with open(out_folder_metrics / "metrics.json", "w") as f:
@@ -256,10 +261,13 @@ def compute_and_save_metrics(
 
     for i, class_name in enumerate(class_names_cleaned):
         row = "{:<6} {:<25} {:<10.4f} {:<10.4f} {:<10.4f} {:<10.4f} {:<15}".format(
-            i, class_name,
-            per_c_ious[i], per_c_fscore[i],
-            per_c_precision[i], per_c_recall[i],
-            default_weights_cleaned[i]
+            i,
+            class_name,
+            per_c_ious[i],
+            per_c_fscore[i],
+            per_c_precision[i],
+            per_c_recall[i],
+            default_weights_cleaned[i],
         )
         for mod in active_modalities:
             row += f" {modality_weights_cleaned[mod][i]:<15}"
@@ -275,7 +283,10 @@ def compute_and_save_metrics(
             print(f"{idx:<6} {class_label}")
         print("\n")
 
-def generate_metrics(hparams: str, path_truth: str, path_pred: str, output_dir: str, task: str) -> list:
+
+def generate_metrics(
+    hparams: str, path_truth: str, path_pred: str, output_dir: str, task: str
+) -> list:
     #################################################################################################
 
     patch_confusion_matrices = []
@@ -302,4 +313,4 @@ def generate_metrics(hparams: str, path_truth: str, path_pred: str, output_dir: 
     # confusion_matrix_path = Path(hparams["paths"]["out_folder"])
     sum_confmat = np.sum(patch_confusion_matrices, axis=0)
     compute_and_save_metrics(sum_confmat, hparams, output_dir, task)
-    return 
+    return

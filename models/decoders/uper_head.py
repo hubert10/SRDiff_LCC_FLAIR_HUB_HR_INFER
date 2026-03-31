@@ -186,11 +186,9 @@ class UPerHead(nn.Module, metaclass=ABCMeta):
         # print("last_ft_map:", last_ft_map.shape)
         # print("cls_sits_ft_map:", cls_sits_ft_map.shape)
 
-
         # print("multi_lvls_cls 1:", multi_lvls_cls[1].shape)
         # print("multi_lvls_cls 2:", multi_lvls_cls[2].shape)
         # print("multi_lvls_cls 3:", multi_lvls_cls[3].shape)
-
 
         # cls_sits_ft_map: torch.Size([2, 19, 64, 64])
 

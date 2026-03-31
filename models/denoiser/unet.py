@@ -38,7 +38,6 @@ class Unet(nn.Module):
             hparams["inputs"]["num_channels_sat"],
             *map(lambda m: dim * m, dim_mults),
         ]
-        # dim: [4, 64, 128, 192, 256]
         in_out = list(zip(dims[:-1], dims[1:]))
         groups = 0
 
@@ -48,6 +47,9 @@ class Unet(nn.Module):
         self.red_channels = nn.ModuleList(
             [nn.Conv2d(c, c // 2, kernel_size=1) for c in channels]
         )
+
+        # # HR feature encoder (simple CNN pyramid)
+
         # Projects conditioning features (e.g., from RRDB, LTAE)
         # into the same space as the input image.
         # Uses transposed convolutions to match spatial dimensions.
@@ -57,6 +59,7 @@ class Unet(nn.Module):
         self.mlp = nn.Sequential(
             nn.Linear(dim, dim * 4), Mish(), nn.Linear(dim * 4, dim)
         )
+
         self.downs = nn.ModuleList([])
         self.ups = nn.ModuleList([])
         num_resolutions = len(in_out)
@@ -123,6 +126,20 @@ class Unet(nn.Module):
         if hparams["weight_init"]:
             self.apply(initialize_weights)
 
+    def extract_hr_feats(self, hr):
+        """
+        hr_feats[0] → [B,64,64,64]
+        hr_feats[1] → [B,128,32,32]
+        hr_feats[2] → [B,256,16,16]
+        """
+
+        feats = []
+        x = hr
+        for layer in self.hr_encoder:
+            x = layer(x)
+            feats.append(x)
+        return feats
+
     def apply_weight_norm(self):
         def _apply_weight_norm(m):
             if isinstance(m, torch.nn.Conv1d) or isinstance(m, torch.nn.Conv2d):
@@ -140,86 +157,87 @@ class Unet(nn.Module):
         # processed.append(upscaled)
         return upscaled
 
-    def super_patch_crop_and_upsample(self, cond, feats):
-        # Cropping the center of the cond tensor which
-        # represents the  super-patch of the Sat LR image
-        cropping_ratio = int(cond.shape[-1] / 4)
-        transform = T.CenterCrop((cropping_ratio, cropping_ratio))
-        cond = transform(cond)
-        upscaled = F.interpolate(
-            cond, size=feats.shape[-2:], mode="bilinear", align_corners=False
+    def dowsample_to_target(self, feats, cond):
+        # processed = []
+        # for feats in cond:
+        dowscaled = F.interpolate(
+            feats, size=cond.shape[-2:], mode="bilinear", align_corners=False
         )
-        return upscaled
+        # processed.append(dowscaled)
+        return dowscaled
 
+    # def forward(self, x, time, cond):
     def forward(self, x, time, cond, hr_img=None):
         # x: noisy image at current diffusion step.
         # time: timestep scalar used for embedding.
         # cond: low-res image features or sequence of features.
         # img_lr_up: upsampled LR image (used if res and up_input are true).
 
+        # Extract HR features for conditioning at multiple scales:
+        if hr_img is not None:
+            hr_feats = [layer(f) for layer, f in zip(self.red_channels, hr_img)]
+        else:
+            hr_feats = None
+
         t = self.time_pos_emb(time)
         t = self.mlp(t)
         h = []
 
-        # Extract HR features for conditioning at multiple scales:
-        if hr_img is not None:
-            # hr_feats = self.extract_hr_feats(hr_img)
-            hr_feats = [layer(f) for layer, f in zip(self.red_channels, hr_img)]
+        # cond 0: torch.Size([2, 64, 64, 64])
+        # cond 1: torch.Size([2, 128, 32, 32])
+        # cond 2: torch.Size([2, 256, 16, 16])
 
-        else:
-            hr_feats = None
-
-        # cond = self.upsample_to_target(cond)
+        # Run through down path, injecting conditioning
+        # at the first level
 
         for i, (resnet, resnet2, downsample) in enumerate(self.downs):
+            # print("x in resnet:", x.shape)
             x = resnet(x, t)
+            # print("x out resnet:", x.shape)
             x = resnet2(x, t)
-
+            # print("x out resnet2:", x.shape)
             # print()
             # print("i:", i)
             # print("x:", x.shape)
             # print("cond[i]:", cond[i].shape)
 
             # Features X from ResNet layers:
-            # torch.Size([2, 64, 64, 64]): 1.6 m GSD
-            # torch.Size([2, 128, 32, 32])  3.2 m GSD
-            # torch.Size([2, 256, 16, 16])  6.4 m GSD
-            # torch.Size([2, 512, 8, 8])  12.8 m GSD
+            # HR original image: torch.Size([2, 64, 64, 64]): 1.6 m GSD
 
-            # Features cond from Cond Net:
-            # torch.Size([2, 64, 10, 10]): 10 m GSD
-            # torch.Size([2, 128, 5, 5])  30 m GSD
-            # torch.Size([2, 256, 3, 3]) 40 m GSD
-            # torch.Size([2, 512, 2, 2])  80 m GSD
+            # Latent Noisy image:
+
+            # torch.Size([2, 64, 16, 16]) -- 6.4 m GSD
+            # torch.Size([2, 128, 8, 8]) -- 12.8 m GSD
+            # torch.Size([2, 256, 4, 4]) -- 25.6 m GSD
+
+            # torch.Size([2, 512, 2, 2]) -- 51.2 m GSD
+
+            # 4 Features Cond Net:
+            # torch.Size([2, 64, 10, 10]) -- 10 m GSD
+            # torch.Size([2, 128, 5, 5]) -- 20 m GSD
+            # torch.Size([2, 256, 3, 3]) -- 40 m GSD
+            # torch.Size([2, 512, 2, 2]) -- 80 m GSD
 
             # HR image Features
 
-            # torch.Size([1, 128, 64, 64]): 1.6 m GSD
-            # torch.Size([1, 256, 32, 32]): 3.2 m GSD
-            # torch.Size([1, 512, 16, 16]): 6.4 m GSD
+            # torch.Size([1, 128, 64, 64]) -- 1.6 m GSD
+            # torch.Size([1, 256, 32, 32]) -- 3.2 m GSD
+            # torch.Size([1, 512, 16, 16]) -- 6.4 m GSD
 
             # At each UNet downsampling layer, the cond net features are
             # upsample to match  the Features X from ResNet layers
-
-            # Fuse LR and HR Conditioning
+            # Here the SITS features should be cropped from the center
+            # of HR image before they are upsampled
 
             cond_i = self.upsample_to_target(cond[i], x)
-            # print(" upsampled cond_i:", cond_i.shape)
-            # print(" hr_feats cond_i:", hr_feats)
-
-            if hr_feats:
-                # hr_i = F.interpolate(
-                #     hr_feats[i],
-                #     size=x.shape[-2:],
-                #     mode="bilinear",
-                #     align_corners=False,
-                # )
-                # We do NOT have a HR feature at the last resolution: 12.8m GSD
-                # so the fusion with the LR feature is skipped!
-                if i < 3:
-                    cond_i = cond_i + hr_feats[i]  # fuse LR and HR guidance
-
-                x = x + cond_i
+            if hr_feats and i < 3:
+                cond_hr_i = cond_i + self.dowsample_to_target(
+                    hr_feats[i], cond_i
+                )  # fuse LR and HR guidance
+                x = x + cond_hr_i
+            else:
+                # for 4th resolution
+                x + cond_i
             h.append(x)
             x = downsample(x)
 
@@ -227,7 +245,6 @@ class Unet(nn.Module):
         x = self.mid_block1(x, t)
         if hparams["use_attn"]:
             x = self.mid_attn(x)
-        x = self.mid_block2(x, t)
 
         # Run through up path, using skip connections.
         for resnet, resnet2, upsample in self.ups:
@@ -238,6 +255,7 @@ class Unet(nn.Module):
             x = upsample(x)
         # Output the refined super-resolved image
         x = self.final_conv(x)
+        # print("x out:", x.shape)
         return x
 
     # 3. Speed Optimization (make_generation_fast_)
@@ -249,3 +267,45 @@ class Unet(nn.Module):
                 return
 
         self.apply(remove_weight_norm)
+
+
+# ---------------Conditioning Temp Feats-------------------
+
+# cond 0: torch.Size([2, 4, 64, 16, 16])
+# cond 1: torch.Size([2, 4, 128, 8, 8])
+# cond 2: torch.Size([2, 4, 256, 4, 4])
+
+# noise: torch.Size([2, 4, 64, 64])
+# x_start: torch.Size([2, 4, 64, 64])
+# x in resnet: torch.Size([2, 4, 64, 64])
+# x out resnet: torch.Size([2, 64, 64, 64])
+# x out resnet2: torch.Size([2, 64, 64, 64])
+
+# i: 0
+# x: torch.Size([2, 64, 64, 64])
+# cond[i]: torch.Size([2, 64, 16, 16])
+# cond_i]: torch.Size([2, 64, 64, 64])
+# x in resnet: torch.Size([2, 64, 32, 32])
+# x out resnet: torch.Size([2, 128, 32, 32])
+# x out resnet2: torch.Size([2, 128, 32, 32])
+
+# i: 1
+# x: torch.Size([2, 128, 32, 32])
+# cond[i]: torch.Size([2, 128, 8, 8])
+# cond_i]: torch.Size([2, 128, 32, 32])
+# x in resnet: torch.Size([2, 128, 16, 16])
+# x out resnet: torch.Size([2, 256, 16, 16])
+# x out resnet2: torch.Size([2, 256, 16, 16])
+
+# i: 2
+# x: torch.Size([2, 256, 16, 16])
+# cond[i]: torch.Size([2, 256, 4, 4])
+# cond_i]: torch.Size([2, 256, 16, 16])
+# x in resnet: torch.Size([2, 256, 8, 8])
+# x out resnet: torch.Size([2, 512, 8, 8])
+# x out resnet2: torch.Size([2, 512, 8, 8])
+# x_recon torch.Size([2, 4, 64, 64])
+# model_output: torch.Size([2, 4, 64, 64])
+# x in resnet: torch.Size([2, 4, 64, 64])
+# x out resnet: torch.Size([2, 64, 64, 64])
+# x out resnet2: torch.Size([2, 64, 64, 64])

@@ -9,73 +9,46 @@ import torchvision.transforms as transforms
 from skimage import exposure
 import torchvision.transforms as T
 from skimage import img_as_float
-import yaml
-import os
-import shutil
-
-from pathlib import Path
-from typing import Dict
-from pytorch_lightning.utilities.rank_zero import rank_zero_only
-
-# def read_config(file_path):
-#     with open(file_path, "r") as f:
-#         return yaml.safe_load(f)
 
 
-def read_config(path: str) -> Dict[str, dict]:
-    """
-    Reads and combines YAML configuration(s) from a file or all files in a directory.
-    Args:
-        path (str): Path to a single YAML file or a directory containing YAML files.
-    Returns:
-        Dict[str, dict]: A combined dictionary with the contents of the YAML file(s).
-    """
-    combined_config = {}
-
-    if os.path.isfile(path) and path.endswith(".yaml"):
-        with open(path, "r") as f:
-            config = yaml.safe_load(f)
-            if isinstance(config, dict):
-                combined_config.update(config)
-    elif os.path.isdir(path):
-        for file_name in os.listdir(path):
-            if file_name.endswith(".yaml"):
-                file_path = os.path.join(path, file_name)
-                with open(file_path, "r") as f:
-                    config = yaml.safe_load(f)
-                    if isinstance(config, dict):
-                        combined_config.update(config)
-    else:
-        raise ValueError(
-            f"Invalid path: {path}. Must be a .yaml file or a directory containing .yaml files."
-        )
-
-    return combined_config
+def read_config(file_path):
+    with open(file_path, "r") as f:
+        return yaml.safe_load(f)
 
 
 def filter_dates(
-    mask, clouds: bool = 2, area_threshold: float = 0.5, proba_threshold: int = 60
+    mask,
+    clouds: int = 2,
+    area_threshold: float = 0.5,
+    proba_threshold: int = 60,
+    ref_patch_size: int = 64 * 64,
 ):
-    """Mask : array T*2*H*W
-    Clouds : 1 if filter on cloud cover, 0 if filter on snow cover, 2 if filter on both
-    Area_threshold : threshold on the surface covered by the clouds / snow
-    Proba_threshold : threshold on the probability to consider the pixel covered (ex if proba of clouds of 30%, do we consider it in the covered surface or not)
-    Return array of indexes to keep
-    """
-    dates_to_keep = []
+    T, _, H, W = mask.shape
+    patch_size = H * W
 
-    for t in range(mask.shape[0]):
+    # 🔹 automatic threshold scaling
+    scale = np.sqrt(ref_patch_size / patch_size)
+    effective_area_threshold = min(0.95, area_threshold * scale)
+
+    dates_to_keep = []
+    coverages = []
+
+    for t in range(T):
         if clouds != 2:
-            cover = np.count_nonzero(mask[t, clouds, :, :] >= proba_threshold)
+            covered = mask[t, clouds] >= proba_threshold
         else:
-            cover = np.count_nonzero(
-                (mask[t, 0, :, :] >= proba_threshold)
-            ) + np.count_nonzero((mask[t, 1, :, :] >= proba_threshold))
-        cover /= mask.shape[2] * mask.shape[3]
-        if cover < area_threshold:
+            covered = (mask[t, 0] >= proba_threshold) | (mask[t, 1] >= proba_threshold)
+
+        cover = np.count_nonzero(covered) / patch_size
+        coverages.append(cover)
+
+        if cover < effective_area_threshold:
             dates_to_keep.append(t)
 
-    # dates_to_keep = [1, 5, 12, 15]
+    # 🔹 fallback: least cloudy date
+    if not dates_to_keep:
+        dates_to_keep = [int(np.argmin(coverages))]
+
     return dates_to_keep
 
 
@@ -502,32 +475,32 @@ def save_image_to_nested_folder(
 
 
 def downsample_sr_image(
-    input_tensor: torch.Tensor,
+    input_tensor: torch.Tensor, downsample_factor: float = 6.25
 ) -> torch.Tensor:
     """
-    Downsamples an SR image tensor [B, C, 64, 64] at 1.6m GSD
-    to an LR image [B, C, 10, 10] at 10m GSD.
+    Downsamples a tensor representing a batch of high-resolution images (1.6m GSD)
+    to a lower resolution (e.g., 10m GSD) using Gaussian blur + interpolation.
 
-    Uses Gaussian blur prior to bicubic downsampling.
+    Args:
+    - input_tensor (torch.Tensor): Tensor of shape (B, C, H, W), e.g., (B, C, 64, 64).
+    - downsample_factor (float): Factor by which to downsample the image. Default is 6.25
+
+    Returns:
+    - torch.Tensor: Downsampled tensor of shape (B, C, H//factor, W//factor).
     """
     B, C, H, W = input_tensor.shape
 
-    # Compute downsample factor from target LR dimension (64 -> 10)
-    down_factor_h = H / 10
-    down_factor_w = W / 10
-    assert abs(down_factor_h - down_factor_w) < 1e-6, "Non-square pixels!"
-    down_factor = down_factor_h  # = 6.4
+    # Step 1: Apply Gaussian blur channel-wise
+    kernel_size = int(2 * round(downsample_factor) + 1)  # odd kernel size
+    blur = T.GaussianBlur(kernel_size=kernel_size, sigma=downsample_factor / 2)
 
-    # Gaussian kernel proportional to downsample factor
-    kernel_size = int(2 * round(down_factor) + 1)
-    blur = T.GaussianBlur(kernel_size=kernel_size, sigma=down_factor / 2)
+    # Apply blur on each image in the batch
+    blurred = torch.stack([blur(img) for img in input_tensor])  # (B, C, H, W)
 
-    # Blur each item in batch
-    blurred = torch.stack([blur(img) for img in input_tensor])
-
-    # Downsample to 10×10
+    # Step 2: Downsample using bicubic interpolation
+    new_H, new_W = int(H / downsample_factor), int(W / downsample_factor)
     downsampled = F.interpolate(
-        blurred, size=(10, 10), mode="bicubic", align_corners=False
+        blurred, size=(new_H, new_W), mode="bicubic", align_corners=False
     )
 
     return downsampled

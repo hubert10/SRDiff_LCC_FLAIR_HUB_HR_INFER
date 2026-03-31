@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import math
-from timm.layers import trunc_normal_
+from timm.models.layers import trunc_normal_
 
 
 class FFCA(nn.Module):
@@ -138,7 +138,7 @@ class FFCA(nn.Module):
             # Adaptive gating: aerial + alpha * fused
             alpha = torch.sigmoid(self.gates[i])
 
-            # LN + residual connection after attentions
+            #  LN + residual connection after attentions
             fs_mhsa = self.norms[i](aer_flat + alpha * attn_out)
 
             # LN + residual connection after MLPs

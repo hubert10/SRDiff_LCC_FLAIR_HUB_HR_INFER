@@ -600,7 +600,7 @@ class MaxVitBlock(nn.Module):
             input_grid_size, kernel_size=3, stride=2, padding=1
         )
         if partition_size == 5:
-        # self.partition_size =  partition_size
+            # self.partition_size =  partition_size
             self.partition_size = _adapt_partition_size(partition_size, self.grid_size)
 
         for idx, p in enumerate(p_stochastic):
@@ -750,12 +750,12 @@ class TConvFormer(nn.Module):
     ) -> None:
         super().__init__()
         _log_api_usage_once(self)
-
         self.d_model = d_model
 
         # Temporal encoder
-        self.temporal_encoder = MultiLevelPixelTemporalEncoder([64, 128, 256, 512], num_heads=4, num_layers=2)
-
+        self.temporal_encoder = MultiLevelPixelTemporalEncoder(
+            [64, 128, 256, 512], num_heads=4, num_layers=2
+        )
         if norm_layer is None:
             norm_layer = partial(nn.BatchNorm2d, eps=1e-3, momentum=0.01)
 
@@ -840,7 +840,7 @@ class TConvFormer(nn.Module):
         """
         B, T, C, H, W = x.shape
         self.nbts = x.size(1)
-        
+
         # print("x:", x.shape)  #  torch.Size([2, 12, 4, 10, 10])
 
         # stem
@@ -888,7 +888,9 @@ class TConvFormer(nn.Module):
             out_feats.append(x)
 
         # --- Reshape all block outputs back to [B, T, C, H, W] ---
-        temp_feats = [f.view(B, T, f.shape[1], f.shape[2], f.shape[3]) for f in out_feats]
+        temp_feats = [
+            f.view(B, T, f.shape[1], f.shape[2], f.shape[3]) for f in out_feats
+        ]
 
         # print("reduced_temp_feats 0:", temp_feats[0].shape)
         # print("reduced_temp_feats 1:", temp_feats[1].shape)

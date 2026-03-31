@@ -8,17 +8,13 @@ Licensed under The MIT License [see LICENSE for details]
 Written by Christoph Reich
 """
 
-from typing import Type, Callable, Tuple, Optional, Set, List, Union
 import torch, os
-import torch.nn as nn
-from timm.models._efficientnet_blocks import SqueezeExcite, DepthwiseSeparableConv
-from timm.layers import drop_path, trunc_normal_, Mlp, DropPath
+from timm.models.layers import trunc_normal_, DropPath
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange, repeat
+from einops import rearrange
 import torch.utils.checkpoint as checkpoint
 import numpy as np
-from timm.layers import DropPath, to_2tuple, trunc_normal_
 import timm
 
 
@@ -590,7 +586,7 @@ class UNetFormerDecoder(nn.Module):
         x = self.p0(x, res0)  # torch.Size([4, 64, 256, 256])
         x = F.interpolate(x, size=(h, w), mode="bilinear", align_corners=False)
         x = self.segmentation_head(x)  # torch.Size([4, 64, 512, 512])
-        return x  # torch.Size([4, N, 512, 512])
+        return x
 
     def init_weight(self):
         for m in self.children():

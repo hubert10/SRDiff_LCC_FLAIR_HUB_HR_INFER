@@ -10,7 +10,7 @@ from utils.hparams import hparams
 from losses.srdiff_loss import (
     pixel_wise_closest_sr_sits_aer_loss,
     grad_pixel_wise_closest_sr_sits_aer_loss,
-    temp_consistency_gradient_magnitude_loss,
+    temp_gradient_magnitude_consistency_loss,
     gray_value_consistency_loss,
     cross_entropy_loss,
 )
@@ -212,10 +212,9 @@ class GaussianDiffusion(nn.Module):
         ]  # shape (B, C, H, W)
         return closest_sat_image
 
-
     def apply_cond_hr_encoder(self, img_hr):
         _, _, res2, res3, res4 = self.aerial_net(img_hr)
-        
+
         # print("res2:", res2.shape)
         # print("res3:", res3.shape)
         # print("res4:", res4.shape)
@@ -293,7 +292,7 @@ class GaussianDiffusion(nn.Module):
                         cond_net_out, img_hr, closest_idx
                     )
                     + hparams["temp_grad_mag_loss_weight"]
-                    * temp_consistency_gradient_magnitude_loss(cond_net_out)
+                    * temp_gradient_magnitude_consistency_loss(cond_net_out)
                     + hparams["gray_value_px_loss_weight"]
                     * gray_value_consistency_loss(cond_net_out, img_lr)
                 )
@@ -407,7 +406,7 @@ class GaussianDiffusion(nn.Module):
                 + hparams["grad_px_loss_weight"]
                 * grad_pixel_wise_closest_sr_sits_aer_loss(x0_pred, img_hr, closest_idx)
                 + hparams["temp_grad_mag_loss_weight"]
-                * temp_consistency_gradient_magnitude_loss(x0_pred)
+                * temp_gradient_magnitude_consistency_loss(x0_pred)
                 + hparams["gray_value_px_loss_weight"]
                 * gray_value_consistency_loss(x0_pred, img_lr)
             )
@@ -563,8 +562,8 @@ class GaussianDiffusion(nn.Module):
         # and apply it in every iteration.
 
         cond_net_out, _, _, cond = self.cond_net(img_lr, dates)
-        
-        # HR conditioning 
+
+        # HR conditioning
         cond_hr = self.apply_cond_hr_encoder(img)
 
         # 3. Iterates over the time steps from the reverse diffusion process
@@ -607,7 +606,7 @@ class GaussianDiffusion(nn.Module):
                     img_,  # x_t
                     torch.full((b,), j, device=device, dtype=torch.long),  # t
                     [feat[:, i] for feat in cond],  # x_e
-                    cond_hr, # for conditioning
+                    cond_hr,  # for conditioning
                     # img_lr_up[:, i, :, :],
                 )
                 if save_intermediate:

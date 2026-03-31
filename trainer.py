@@ -6,29 +6,17 @@ import warnings
 import numpy as np
 import pandas as pd
 from PIL import Image
+import torch.nn as nn
 from tqdm import tqdm
 from pathlib import Path
 import torch.distributed as dist
 from torch.utils.tensorboard import SummaryWriter
-
+from data.datamodule import FlairDataModule
+from utils.metrics import generate_miou, generate_mf1s, generate_metrics
 from utils.utils_dataset import (
-    read_config,
-    pad_collate_train,
-    pad_collate_predict,
     save_image_to_nested_folder,
     save_hr_image_to_nested_folder,
 )
-from data.datamodule import FlairDataModule
-from utils.utils_prints import (
-    print_config,
-    print_recap,
-    print_metrics,
-    print_inference_time,
-    print_iou_metrics,
-    print_f1_metrics,
-    print_overall_accuracy,
-)
-from utils.metrics import generate_miou, generate_mf1s, generate_metrics
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "1"
 # sys.path.append('../')
@@ -51,6 +39,7 @@ else:
 warnings.filterwarnings("ignore", ".*does not have many workers.*")
 from data.utils_data.paths import get_datasets
 from tasks.module_setup import build_data_module
+from pytorch_lightning.utilities.rank_zero import rank_zero_only
 
 
 class Trainer:
@@ -80,17 +69,6 @@ class Trainer:
         self.config = hparams
         self.device = device
         self.datamodule = FlairDataModule(hparams)
-
-    def crop_sits_image(self, input_tensor: torch.Tensor) -> torch.Tensor:
-        """
-        - cropped upsampled image to (5, 100, 100).
-        Returns:
-        - torch.Tensor: Upsampled tensor of shape (5, 256, 256).
-        """
-        cropping_ration = int(input_tensor.shape[-1] / 4)
-        transform = cT.CenterCrop((cropping_ration, cropping_ration))
-        cropped_tensor = transform(input_tensor)
-        return cropped_tensor
 
     def seed_worker(self, worker_id):
         worker_seed = torch.initial_seed() % 2**32
@@ -170,13 +148,116 @@ class Trainer:
     def training_step(self, batch):
         raise NotImplementedError
 
+    @rank_zero_only
+    def print_model_parameters(self, model: nn.Module) -> None:
+        """
+        Print the total and trainable number of parameters in the model,
+        broken down by component.
+        Args:
+            model (nn.Module): Full model containing latent_diff, encoders, decoder, and fusion modules.
+        """
+
+        def count_params(module: nn.Module | None):
+            if module is None:
+                return 0, 0
+            total = sum(p.numel() for p in module.parameters())
+            trainable = sum(p.numel() for p in module.parameters() if p.requires_grad)
+            return total, trainable
+
+        # Parameter counts
+        cond_total, cond_train = count_params(model.latent_diff.cond_net)
+        denoise_total, denoise_train = count_params(model.latent_diff.denoise_net)
+        vae_total, vae_train = count_params(model.latent_diff.first_stage_model)
+        sits_enc_total, sits_enc_train = count_params(model.sr_sits_enc)
+        aer_enc_total, aer_enc_train = count_params(model.aer_net_enc)
+        aer_dec_total, aer_dec_train = count_params(model.aer_net_dec)
+        fusion_total, fusion_train = count_params(model.fusion_module)
+
+        total_params = (
+            cond_total
+            + denoise_total
+            + vae_total
+            + sits_enc_total
+            + aer_enc_total
+            + aer_dec_total
+            + fusion_total
+        )
+
+        total_trainable = (
+            cond_train
+            + denoise_train
+            + vae_train
+            + sits_enc_train
+            + aer_enc_train
+            + aer_dec_train
+            + fusion_train
+        )
+
+        # Build table
+        table = " " + "-" * 126 + "\n"
+        table += (
+            "| {:<25} | {:<25} | {:<17} | {:>15} | {:>15} |\n"
+            "| {} | {} | {} | {} | {} |\n"
+        ).format(
+            "Model component",
+            "Sub-module",
+            "Type",
+            "Total params",
+            "Trainable",
+            "-" * 25,
+            "-" * 25,
+            "-" * 17,
+            "-" * 15,
+            "-" * 15,
+        )
+
+        rows = [
+            ("Conditioning", "cond_net", "conditioning net", cond_total, cond_train),
+            ("Denoising", "denoise_net", "denoising net", denoise_total, denoise_train),
+            ("VAE", "vae_net", "VAE net", vae_total, vae_train),
+            (
+                "SITS Encoder",
+                "sr_sits_enc",
+                "task sits encoder",
+                sits_enc_total,
+                sits_enc_train,
+            ),
+            (
+                "Aer Encoder",
+                "aer_net_enc",
+                "task aer encoder",
+                aer_enc_total,
+                aer_enc_train,
+            ),
+            (
+                "Aer Decoder",
+                "aer_net_dec",
+                "task decoder",
+                aer_dec_total,
+                aer_dec_train,
+            ),
+            ("Fusion", "fusion_module", "fusion module", fusion_total, fusion_train),
+        ]
+
+        for component, submodule, module_type, total, trainable in rows:
+            table += "| {:<25} | {:<25} | {:<17} | {:>15,} | {:>15,} |\n".format(
+                component, submodule, module_type, total, trainable
+            )
+
+        # Footer
+        table += "|" + "-" * 126 + "|\n"
+        table += "| {:<25}   {:<25}   {:<17}   {:>15,}   {:>15,} |\n".format(
+            "Total parameters", "", "", total_params, total_trainable
+        )
+        table += " " + "-" * 126
+
+        print("")
+        print(table)
+        print("")
+
     def train(self):
         model = self.build_model()
-        total_params = sum(p.numel() for p in model.parameters())
-
-        print("", "", "-" * 80, " " * 28 + "--- TRAINABLE PARAMS ---", sep="\n")
-        print(f"Number of parameters: {total_params}")
-        print()
+        self.print_model_parameters(model)
 
         optimizer = self.build_optimizer(model)
         self.global_step = training_step = load_checkpoint(
@@ -207,8 +288,8 @@ class Trainer:
             previous_val_res = pd.read_csv(val_res_path, sep=";")
             val_list = previous_val_res["val_metrics"].tolist()
             val_steps = previous_val_res["train_step"].tolist()
-            if not hparams["train_diffsr"] and "val_loss" in previous_val_res.columns:
-                val_loss_list = previous_val_res["val_loss"].tolist()
+            # if not hparams["train_diffsr"] and "val_loss" in previous_val_res.columns:
+            #     val_loss_list = previous_val_res["val_loss"].tolist()
         except Exception:
             previous_val_res = pd.DataFrame()
 
@@ -216,7 +297,7 @@ class Trainer:
             c = 0
             loss_ = 0
 
-            for idx, batch in enumerate(train_pbar):
+            for batch in train_pbar:
                 if (training_step % hparams["val_check_interval"] == 0) and (
                     training_step != 0
                 ):
@@ -226,26 +307,17 @@ class Trainer:
                             val_res, val_step, val_loss = self.validate(training_step)
                             val_list.append(val_res)
                             val_steps.append(val_step)
-                            if not hparams["train_diffsr"]:
-                                val_loss_list.append(val_loss)
-
-                # if training_step % hparams["save_ckpt_interval"] == 0:
-                #     save_checkpoint(
-                #         model,
-                #         optimizer,
-                #         self.work_dir,
-                #         training_step,
-                #         hparams["num_ckpt_keep"],
-                #     )
+                            # if not hparams["train_diffsr"]:
+                            #     val_loss_list.append(val_loss)
 
                 if training_step % hparams["save_ckpt_interval"] == 0:
-                    val_miou = None
-                    if (
-                        val_list
-                        and isinstance(val_list[-1], dict)
-                        and "val/miou" in val_list[-1]
-                    ):
-                        val_miou = round(val_list[-1]["val/miou"], 2)
+                    save_checkpoint(
+                        model,
+                        optimizer,
+                        self.work_dir,
+                        training_step,
+                        hparams["num_ckpt_keep"],
+                    )
 
                     save_checkpoint(
                         model,
@@ -253,7 +325,7 @@ class Trainer:
                         self.work_dir,
                         training_step,
                         hparams["num_ckpt_keep"],
-                        val_miou=val_miou,
+                        # val_miou=val_miou,
                     )
 
                 model.train()
@@ -289,54 +361,59 @@ class Trainer:
                 save_val = pd.DataFrame(
                     {"train_step": val_steps, "val_metrics": val_list}
                 )
-                if not hparams["train_diffsr"]:
-                    save_val["val_loss"] = val_loss_list
+                # if not hparams["train_diffsr"]:
+                #     save_val["val_loss"] = val_loss_list
                 save_val.to_csv(val_res_path, sep=";", index=False)
 
     def validate(self, training_step):
         val_dataloader = self.build_val_dataloader()
-        pbar = tqdm(enumerate(val_dataloader), total=len(val_dataloader))
+        pbar = tqdm(val_dataloader, total=len(val_dataloader))
         val_loss = 0
-        c = 0
+        batch_count = 0
         val_metrics = {k: [] for k in self.metric_keys}
 
-        for _, batch in pbar:
-            # for batch_idx, batch in pbar:
-            batch = move_to_cuda(batch)
-            _, _, _, ret, loss = self.sample_and_test(batch)
-            # img, preds, cond_net_out, ret, loss = self.sample_and_test(batch)
+        for batch in pbar:
 
-            if not hparams["train_diffsr"]:
+            batch = move_to_cuda(batch)
+            _, _, ret, loss = self.sample_and_test(batch)
+            # ---- accumulate loss ----
+            if loss is not None:
                 val_loss += loss.detach().item()
-                c += 1
+                batch_count += 1
+
             metrics = {}
-            metrics.update({k: np.mean(ret[k]) for k in self.metric_keys})
+
             for k in self.metric_keys:
-                val_metrics[k].append(np.mean(ret[k]))
+                if len(ret[k]) > 0:
+                    m = np.mean(ret[k])
+                    val_metrics[k].append(m)
+                    metrics[k] = m
+                    metrics["total_loss"] = val_loss
+                else:
+                    metrics[k] = 0.0  # fallback
+
             pbar.set_postfix(**tensors_to_scalars(metrics))
-        if not hparams["train_diffsr"]:
-            val_loss = val_loss / c
+
+        # ---- average loss ----
+        val_loss = val_loss / batch_count if batch_count > 0 else 0.0
+
         if hparams["infer"]:
             print("Val results:", metrics)
         else:
-            if not self.first_val:
-                self.log_metrics(
-                    {f"val/{k}": v for k, v in metrics.items()}, training_step
-                )
-                print("Val results:", metrics)
-                return (
-                    {f"val/{k}": np.mean(v) for k, v in val_metrics.items()},
-                    training_step,
-                    val_loss,
-                )
-            else:
-                print("Sanity val results:", metrics)
-                return (
-                    {f"val/{k}": np.mean(v) for k, v in val_metrics.items()},
-                    training_step,
-                    val_loss,
-                )
-        self.first_val = False
+            # Debug empty metrics
+            for k, v in val_metrics.items():
+                if len(v) == 0:
+                    print(f"WARNING: {k}-{v}] is empty at step {training_step}")
+
+        # ---- average metrics ----
+        val_metrics_mean = {
+            f"val/{k}": np.mean(v) if len(v) > 0 else 0.0
+            for k, v in val_metrics.items()
+        }
+
+        # ---- log everything ----
+        self.log_metrics({**val_metrics_mean, "val/loss": val_loss}, training_step)
+        return val_metrics_mean, training_step, val_loss
 
     # Run Inference
     def test(self):
@@ -358,8 +435,8 @@ class Trainer:
         torch.backends.cudnn.benchmark = False
         if hparams["test_save_png"]:
             if hparams["test_diff"]:
-                if hasattr(self.model.gaussian.denoise_fn, "make_generation_fast_"):
-                    self.model.gaussian.denoise_fn.make_generation_fast_()
+                if hasattr(self.model.latent_diff.denoise_net, "make_generation_fast_"):
+                    self.model.latent_diff.denoise_net.make_generation_fast_()
             # os.makedirs(f"{self.gen_dir}/RRDB", exist_ok=True)
             os.makedirs(f"{self.gen_dir}/HR", exist_ok=True)
             os.makedirs(f"{self.gen_dir}/LR", exist_ok=True)
@@ -375,15 +452,12 @@ class Trainer:
                 gen_dir = self.gen_dir
                 item_name = batch["item_name"]
                 img_hr = batch["img_hr"]
+                img = batch["img"]
                 img_lr = batch["img_lr"]
                 img_lr_up = batch["img_lr_up"]
                 dates = batch["dates"]
-                res = self.sample_and_test(batch)
-
-                if len(res) == 5:
-                    img_sr, preds, _, ret, _ = res
-                else:
-                    img_sr, preds, ret, ret = res
+                
+                img_sr, preds, ret, _ = self.sample_and_test(batch)
 
                 if img_sr is not None:
                     metrics = list(self.metric_keys)
@@ -402,7 +476,7 @@ class Trainer:
                         # For single image batch size, we can use the following code
                         if hparams["test_batch_size"] == 1:
                             img_lr = [
-                                self.tensor2img(self.crop_sits_image(im[None, ...]))
+                                self.tensor2img(im[None, ...])
                                 for im in img_lr.squeeze()
                             ]
 
@@ -420,10 +494,11 @@ class Trainer:
                             img_sr, img_hr, img_lr, img_lr_up, preds, dates
                         ):
                             # Save high-resolution ground truth image
-                            # hr_g = Image.fromarray(hr_g[:, :, :4])
-                            # save_hr_image_to_nested_folder(
-                            #     hr_g, item_name, "HR", "img", None, base_dir=gen_dir
-                            # )
+
+                            hr_g = Image.fromarray(hr_g[:, :, :3])
+                            save_hr_image_to_nested_folder(
+                                hr_g, item_name[0], "HR", "img", None, base_dir=gen_dir
+                            )
 
                             # Save pixel-wise predictions
                             pred = pred.cpu().numpy().astype("uint8")
@@ -438,41 +513,41 @@ class Trainer:
                                 f"{output_file}", compression="tiff_lzw"
                             )
 
-                            # if hparams["test_batch_size"] == 1:
-                            #     dates = [date for date in dates]
+                            if hparams["test_batch_size"] == 1:
+                                dates = [date for date in dates]
 
-                            #     lr = [Image.fromarray(im[0]) for im in img_lr]
-                            #     for e, (im, date) in enumerate(zip(lr, dates[0])):
-                            #         save_image_to_nested_folder(
-                            #             im,
-                            #             item_name,
-                            #             "LR",
-                            #             "sen",
-                            #             f"{e}_{date}",
-                            #             base_dir=gen_dir,
-                            #         )
+                                lr = [Image.fromarray(im[0]) for im in img_lr]
+                                for e, (im, date) in enumerate(zip(lr, dates[0])):
+                                    save_image_to_nested_folder(
+                                        im,
+                                        item_name[0],
+                                        "LR",
+                                        "sen",
+                                        f"{e}_{date}",
+                                        base_dir=gen_dir,
+                                    )
 
-                            #     lr_up = [Image.fromarray(im[0]) for im in img_lr_up]
-                            #     for e, (im, date) in enumerate(zip(lr_up, dates[0])):
-                            #         save_image_to_nested_folder(
-                            #             im,
-                            #             item_name,
-                            #             "UP",
-                            #             "sen",
-                            #             f"{e}_{date}",
-                            #             base_dir=gen_dir,
-                            #         )
+                                lr_up = [Image.fromarray(im[0]) for im in img_lr_up]
+                                for e, (im, date) in enumerate(zip(lr_up, dates[0])):
+                                    save_image_to_nested_folder(
+                                        im,
+                                        item_name[0],
+                                        "UP",
+                                        "sen",
+                                        f"{e}_{date}",
+                                        base_dir=gen_dir,
+                                    )
 
-                            #     sr = [Image.fromarray(im[0]) for im in img_sr]
-                            #     for e, (im, date) in enumerate(zip(sr, dates[0])):
-                            #         save_image_to_nested_folder(
-                            #             im,
-                            #             item_name,
-                            #             "SR",
-                            #             "sen",
-                            #             f"{e}_{date}",
-                            #             base_dir=gen_dir,
-                            #         )
+                                sr = [Image.fromarray(im[0]) for im in img_sr]
+                                for e, (im, date) in enumerate(zip(sr, dates[0])):
+                                    save_image_to_nested_folder(
+                                        im,
+                                        item_name[0],
+                                        "SR",
+                                        "sen",
+                                        f"{e}_{date}",
+                                        base_dir=gen_dir,
+                                    )
 
             self.results = {
                 k: self.results[k]
@@ -488,21 +563,12 @@ class Trainer:
 
         csv_path = Path(hparams["paths"]["test_csv"])
         df = pd.read_csv(csv_path, sep=";")
-
         gt_paths = df[hparams["labels"][0]].tolist()
-
-        # pred_msk = os.path.join(self.gen_dir, "PR")
         pred_msk = os.path.join(self.gen_dir, "PR")
+        generate_metrics(
+            hparams, gt_paths, pred_msk, self.gen_dir, hparams["labels"][0]
+        )
 
-        # mIou, ious = generate_miou(hparams, gt_paths, pred_msk)
-        # mf1, f1s, oa = generate_mf1s(hparams, gt_paths, pred_msk)
-
-        # print_iou_metrics(mIou, ious)
-        # print_f1_metrics(mf1, f1s)
-        # print_overall_accuracy(oa)
-
-        generate_metrics(hparams, gt_paths, pred_msk, self.gen_dir, hparams["labels"][0])
-    
     # utils
     def log_metrics(self, metrics, step):
         metrics = self.metrics_to_scalars(metrics)
@@ -555,54 +621,3 @@ if __name__ == "__main__":
 # scp -r D:\kanyamahanga\Datasets\FLAIR_HUB\data nhgnkany@transfer.cluster.uni-hannover.de:/bigwork/nhgnkany/FLAIR_HUB
 
 # scp -r "D:/kanyamahanga/Datasets/FLAIR_HUB/data/*" nhgnkany@transfer.cluster.uni-hannover.de:/bigwork/nhgnkany/FLAIR_HUB/
-
-
-# torch.Size([2, 2])
-# layer out: torch.Size([12, 512, 2, 2])
-# block out: torch.Size([12, 512, 2, 2])
-# reduced_temp_feats 0: torch.Size([1, 12, 64, 10, 10])
-# reduced_temp_feats 1: torch.Size([1, 12, 128, 5, 5])
-# reduced_temp_feats 2: torch.Size([1, 12, 256, 3, 3])
-# reduced_temp_feats 3: torch.Size([1, 12, 512, 2, 2])
-# red_temp_feats 0: torch.Size([1, 64, 10, 10])
-# red_temp_feats 1: torch.Size([1, 128, 5, 5])
-# red_temp_feats 2: torch.Size([1, 256, 3, 3])
-# red_temp_feats 3: torch.Size([1, 512, 2, 2])
-# inputs 0: torch.Size([1, 64, 10, 10])
-# inputs 1: torch.Size([1, 128, 5, 5])
-# inputs 2: torch.Size([1, 256, 3, 3])
-# inputs 3: torch.Size([1, 512, 2, 2])
-# psp_outs x0: torch.Size([1, 512, 2, 2])
-# ppm_out in: torch.Size([1, 512, 2, 2])
-# ppm_out out: torch.Size([1, 512, 1, 1])
-# ppm_out in: torch.Size([1, 512, 2, 2])
-# ppm_out out: torch.Size([1, 512, 2, 2])
-# ppm_out in: torch.Size([1, 512, 2, 2])
-# ppm_out out: torch.Size([1, 512, 3, 3])
-# ppm_out in: torch.Size([1, 512, 2, 2])
-# ppm_out out: torch.Size([1, 512, 4, 4])
-# ppm_outs 0: torch.Size([1, 512, 2, 2])
-# ppm_outs 1: torch.Size([1, 512, 2, 2])
-# ppm_outs 2: torch.Size([1, 512, 2, 2])
-# output conc: torch.Size([1, 512, 2, 2])
-# fpn_outs[i]: torch.Size([1, 512, 2, 2])
-# fpn_outs[i]: torch.Size([1, 512, 3, 3])
-# fpn_outs[i]: torch.Size([1, 512, 5, 5])
-# multi_levels_feature_maps 0: torch.Size([1, 512, 10, 10])
-# multi_levels_feature_maps 1: torch.Size([1, 512, 10, 10])
-# multi_levels_feature_maps 2: torch.Size([1, 512, 10, 10])
-# multi_levels_feature_maps 3: torch.Size([1, 512, 10, 10])
-# last_ft_map: torch.Size([1, 512, 10, 10])
-# cls_sits_ft_map: torch.Size([1, 19, 10, 10])
-# multi_lvls_cls 1: torch.Size([1, 19, 10, 10])
-# multi_lvls_cls 2: torch.Size([1, 19, 10, 10])
-# multi_lvls_cls 3: torch.Size([1, 19, 10, 10])
-# sits_logit: torch.Size([1, 19, 10, 10])
-# enc_features: torch.Size([1, 12, 64, 10, 10])
-# enc_features: torch.Size([1, 12, 128, 5, 5])
-# enc_features: torch.Size([1, 12, 256, 3, 3])
-# enc_features: torch.Size([1, 12, 512, 2, 2])
-#                                                                                                                                                                                                                 cond 0: torch.Size([1, 64, 10, 10])
-# cond 1: torch.Size([1, 128, 5, 5])                                                                                                                                                      | 0/500 [00:00<?, ?it/s]
-# cond 2: torch.Size([1, 256, 3, 3])
-# cond 3: torch.Size([1, 512, 2, 2])

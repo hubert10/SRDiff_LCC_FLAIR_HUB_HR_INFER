@@ -13,13 +13,13 @@ import timm
 import torch, os
 import torch.nn as nn
 from timm.models._efficientnet_blocks import SqueezeExcite, DepthwiseSeparableConv
-from timm.layers import drop_path, trunc_normal_, Mlp, DropPath
+from timm.models.layers import drop_path, trunc_normal_, Mlp, DropPath
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, repeat
 import torch.utils.checkpoint as checkpoint
 import numpy as np
-from timm.layers import DropPath, to_2tuple, trunc_normal_
+from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 
 
 class ConvBNReLU(nn.Sequential):
@@ -244,20 +244,19 @@ class GlobalLocalAttention(nn.Module):
 
     def pad(self, x, ps):
         _, _, H, W = x.size()
-        # print("x pad:", x.shape)
-        # print("x ps:", ps)
         if W % ps != 0:
-            x = F.pad(x, (0, ps - W % ps), mode="constant")
+            x = F.pad(x, (0, ps - W % ps), mode="reflect")
         if H % ps != 0:
-            x = F.pad(x, (0, 0, 0, ps - H % ps), mode="constant")
+            x = F.pad(x, (0, 0, 0, ps - H % ps), mode="reflect")
         return x
 
     def pad_out(self, x):
-        x = F.pad(x, pad=(0, 1, 0, 1), mode="constant")
+        x = F.pad(x, pad=(0, 1, 0, 1), mode="reflect")
         return x
 
     def forward(self, x):
         B, C, H, W = x.shape
+
         local = self.local2(x) + self.local1(x)
 
         x = self.pad(x, self.ws)
@@ -305,15 +304,11 @@ class GlobalLocalAttention(nn.Module):
 
         attn = attn[:, :, :H, :W]
 
-        # out = self.attn_x(F.pad(attn, pad=(0, 0, 0, 1), mode="reflect")) + self.attn_y(
-        #     F.pad(attn, pad=(0, 1, 0, 0), mode="reflect")
-        # )
-
-        out = self.attn_x(F.pad(attn, pad=(0, 1, 0, 1), mode="constant")) + self.attn_y(
-            F.pad(attn, pad=(0, 1, 0, 1), mode="constant")
+        out = self.attn_x(F.pad(attn, pad=(0, 0, 0, 1), mode="reflect")) + self.attn_y(
+            F.pad(attn, pad=(0, 1, 0, 0), mode="reflect")
         )
 
-        out = out + F.pad(local, pad=(0, 1, 0, 1), mode="constant")
+        out = out + local
         out = self.pad_out(out)
         out = self.proj(out)
         out = out[:, :, :H, :W]
@@ -491,16 +486,9 @@ class WF(nn.Module):
         self.post_conv = ConvBNReLU(decoder_channels, decoder_channels, kernel_size=3)
 
     def forward(self, x, res):
-        # print("WF x:", x.shape)
-        # x = F.interpolate(x, scale_factor=2, mode="bilinear", align_corners=False)
-
-        x = F.interpolate(x, size=res.shape[2:], mode="bilinear", align_corners=False)
+        x = F.interpolate(x, scale_factor=2, mode="bilinear", align_corners=False)
         weights = nn.ReLU()(self.weights)
         fuse_weights = weights / (torch.sum(weights, dim=0) + self.eps)
-        # print("WF x:", x.shape)
-        # print("WF res:", res.shape)
-        # print("WF self.pre_conv(res):", self.pre_conv(res).shape)
-
         x = fuse_weights[0] * self.pre_conv(res) + fuse_weights[1] * x
         x = self.post_conv(x)
         return x
@@ -558,7 +546,7 @@ class FeatureRefinementHead(nn.Module):
 class UNetDecoder(nn.Module):
     def __init__(
         self,
-        encoder_channels=(64, 128, 256, 512),
+        encoder_channels=(64, 128, 256),  # (64, 128, 256, 512)
         decoder_channels=64,
         dropout=0.1,
         window_size=8,
@@ -567,15 +555,12 @@ class UNetDecoder(nn.Module):
         super(UNetDecoder, self).__init__()
 
         self.pre_conv = ConvBN(encoder_channels[-1], decoder_channels, kernel_size=1)
-        self.b3 = Block(dim=decoder_channels, num_heads=16, window_size=window_size)
-
         self.b2 = Block(dim=decoder_channels, num_heads=16, window_size=window_size)
-        self.p2 = WF(encoder_channels[-2], decoder_channels)
 
         self.b1 = Block(dim=decoder_channels, num_heads=16, window_size=window_size)
-        self.p1 = WF(encoder_channels[-3], decoder_channels)
+        self.p1 = WF(encoder_channels[-2], decoder_channels)
 
-        self.p0 = FeatureRefinementHead(encoder_channels[-4], decoder_channels)
+        self.p0 = FeatureRefinementHead(encoder_channels[-3], decoder_channels)
 
         self.segmentation_head = nn.Sequential(
             ConvBNReLU(decoder_channels, decoder_channels),
@@ -584,32 +569,10 @@ class UNetDecoder(nn.Module):
         )
         self.init_weight()
 
-    # def forward(self, res0, res1, res2, res3, h, w):
-
-    #     x = self.b3(self.pre_conv(res3))
-
-    #     x = self.p2(x, res2)
-    #     x = self.b2(x)
-
-    #     x = self.p1(x, res1)
-    #     x = self.b1(x)
-
-    #     x = self.p0(x, res0)
-
-    #     x = self.segmentation_head(x)  # torch.Size([4, 64, 256, 256])
-    #     print("self.segmentation_head(x):", x.shape)
-    #     x = F.interpolate(x, size=(h, w), mode="bilinear", align_corners=False)
-    #     return x
-
-    def forward(self, res0, res1, res2, res3, h, w):
-        enc_features = [res0, res1, res2]  # list to collect features
+    def forward(self, x, h, w):
+        res0, res1, res2 = x[0], x[1], x[2]
         dec_features = []
-
-        x = self.b3(self.pre_conv(res3))
-        dec_features.append(x)  # save after b3
-
-        x = self.p2(x, res2)
-        x = self.b2(x)
+        x = self.b2(self.pre_conv(res2))
         dec_features.append(x)  # save after b2
 
         x = self.p1(x, res1)
@@ -627,15 +590,16 @@ class UNetDecoder(nn.Module):
             F.interpolate(f, size=target_size, mode="bilinear", align_corners=False)
             for f in dec_features
         ]
-
         multi_lvls_cls = [
             self.segmentation_head(feature) for feature in upsampled_features
         ]
         # print("x: ------------------------", x.shape)
+        # torch.Size([2, 256, 64, 64])
         # x = F.interpolate(x, size=(h, w), mode="bilinear", align_corners=False) # torch.Size([4, 64, 256, 256])
         out = self.segmentation_head(x)  # torch.Size([4, 64, 64, 64])
         # print("out: ------------------------", out.shape)
-        return out, multi_lvls_cls, enc_features
+        # torch.Size([2, 13, 64, 64])
+        return out, multi_lvls_cls
 
     def init_weight(self):
         for m in self.children():

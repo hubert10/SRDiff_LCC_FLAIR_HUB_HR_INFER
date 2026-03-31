@@ -6,7 +6,6 @@ beta_schedule: cosine
 beta_s: 0.008
 beta_end: 0.02
 hidden_size: 64
-timesteps: 500
 res: true
 res_rescale: 2.0
 up_input: false

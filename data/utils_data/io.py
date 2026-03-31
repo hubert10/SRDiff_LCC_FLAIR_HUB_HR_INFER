@@ -23,8 +23,7 @@ def read_patch(raster_file: str, channels: list = None) -> np.ndarray:
     return array
 
 
-
-# The code below takes the following tensors for noise prediction as the denoiser of a diffusion model: 
+# The code below takes the following tensors for noise prediction as the denoiser of a diffusion model:
 
 # Are the cond features integrated correctly with the given GSDs ?
 
@@ -35,7 +34,7 @@ def read_patch(raster_file: str, channels: list = None) -> np.ndarray:
 #     cond 1: torch.Size([2, 128, 5, 5])  # at 20 m GSD
 #     cond 2: torch.Size([2, 256, 3, 3])  # at 40 m GSD
 #     cond 3: torch.Size([2, 512, 2, 2])  # at 80 m GSD
-#     ], 
+#     ],
 
 # hr_img = [
 #     res2: torch.Size([1, 128, 64, 64]) # at 1.6 m GSD
@@ -201,7 +200,7 @@ def read_patch(raster_file: str, channels: list = None) -> np.ndarray:
 #         else:
 #             hr_feats = [None] * len(cond)
 
-#         print("x:", x.shape)
+#         ("x:", x.shape)
 
 #         # print("cond 0:", cond[0].shape)
 #         # print("cond 1:", cond[1].shape)
