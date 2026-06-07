@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 from tqdm import tqdm
+import torch.nn as nn
 from pathlib import Path
 import torch.distributed as dist
 from torch.utils.tensorboard import SummaryWriter
@@ -35,6 +36,7 @@ else:
 warnings.filterwarnings("ignore", ".*does not have many workers.*")
 from data.utils_data.paths import get_datasets
 from tasks.module_setup import build_data_module
+from pytorch_lightning.utilities.rank_zero import rank_zero_only
 
 
 class Trainer:
@@ -143,13 +145,124 @@ class Trainer:
     def training_step(self, batch):
         raise NotImplementedError
 
+    @rank_zero_only
+    def print_model_parameters(self, model: nn.Module) -> None:
+        """
+        Print the total and trainable number of parameters in the model,
+        broken down by component.
+        Args:
+            model (nn.Module): Full model containing latent_diff, encoders, decoder, and fusion modules.
+        """
+
+        def count_params(module: nn.Module | None):
+            if module is None:
+                return 0, 0
+            total = sum(p.numel() for p in module.parameters())
+            trainable = sum(p.numel() for p in module.parameters() if p.requires_grad)
+            return total, trainable
+
+        # Parameter counts
+        cond_total, cond_train = count_params(model.gaussian.cond_net)
+        denoise_total, denoise_train = count_params(model.gaussian.denoise_net)
+        sits_enc_total, sits_enc_train = count_params(model.sr_sits_enc)
+        sits_dec_total, sits_dec_train = count_params(model.sr_sits_dec)
+        aer_enc_total, aer_enc_train = count_params(model.aer_net_enc)
+        aer_dec_total, aer_dec_train = count_params(model.aer_net_dec)
+        fusion_total, fusion_train = count_params(model.fusion_module)
+
+        total_params = (
+            cond_total
+            + denoise_total
+            + sits_enc_total
+            + sits_dec_total
+            + aer_enc_total
+            + aer_dec_total
+            + fusion_total
+        )
+
+        total_trainable = (
+            cond_train
+            + denoise_train
+            + sits_enc_train
+            + sits_dec_train
+            + aer_enc_train
+            + aer_dec_train
+            + fusion_train
+        )
+
+        # Build table
+        table = " " + "-" * 126 + "\n"
+        table += (
+            "| {:<25} | {:<25} | {:<17} | {:>15} | {:>15} |\n"
+            "| {} | {} | {} | {} | {} |\n"
+        ).format(
+            "Model component",
+            "Sub-module",
+            "Type",
+            "Total params",
+            "Trainable",
+            "-" * 25,
+            "-" * 25,
+            "-" * 17,
+            "-" * 15,
+            "-" * 15,
+        )
+
+        rows = [
+            ("Conditioning", "cond_net", "conditioning net", cond_total, cond_train),
+            ("Denoising", "denoise_net", "denoising net", denoise_total, denoise_train),
+            (
+                "SITS Encoder",
+                "sr_sits_enc",
+                "task sits encoder",
+                sits_enc_total,
+                sits_enc_train,
+            ),
+            (
+                "SITS Decoder",
+                "sr_sits_dec",
+                "task sits Decoder",
+                sits_dec_total,
+                sits_dec_train,
+            ),
+            (
+                "Aer Encoder",
+                "aer_net_enc",
+                "task aer encoder",
+                aer_enc_total,
+                aer_enc_train,
+            ),
+            (
+                "Aer Decoder",
+                "aer_net_dec",
+                "task decoder",
+                aer_dec_total,
+                aer_dec_train,
+            ),
+            ("Fusion", "fusion_module", "fusion module", fusion_total, fusion_train),
+        ]
+
+        for component, submodule, module_type, total, trainable in rows:
+            table += "| {:<25} | {:<25} | {:<17} | {:>15,} | {:>15,} |\n".format(
+                component, submodule, module_type, total, trainable
+            )
+
+        # Footer
+        table += "|" + "-" * 126 + "|\n"
+        table += "| {:<25}   {:<25}   {:<17}   {:>15,}   {:>15,} |\n".format(
+            "Total parameters", "", "", total_params, total_trainable
+        )
+        table += " " + "-" * 126
+
+        print("")
+        print(table)
+        print("")
+
+
     def train(self):
         model = self.build_model()
-        total_params = sum(p.numel() for p in model.parameters())
+        self.print_model_parameters(model)
 
-        print("", "", "-" * 80, " " * 28 + "--- TRAINABLE PARAMS ---", sep="\n")
-        print(f"Number of parameters: {total_params}")
-        print()
 
         optimizer = self.build_optimizer(model)
         self.global_step = training_step = load_checkpoint(
@@ -277,8 +390,7 @@ class Trainer:
         for _, batch in pbar:
             # for batch_idx, batch in pbar:
             batch = move_to_cuda(batch)
-            _, _, _, ret, loss = self.sample_and_test(batch)
-            # img, preds, cond_net_out, ret, loss = self.sample_and_test(batch)
+            _, _, ret, loss = self.sample_and_test(batch)
 
             if not hparams["train_diffsr"]:
                 val_loss += loss.detach().item()
@@ -332,8 +444,8 @@ class Trainer:
         torch.backends.cudnn.benchmark = False
         if hparams["test_save_png"]:
             if hparams["test_diff"]:
-                if hasattr(self.model.gaussian.denoise_fn, "make_generation_fast_"):
-                    self.model.gaussian.denoise_fn.make_generation_fast_()
+                if hasattr(self.model.gaussian.denoise_net, "make_generation_fast_"):
+                    self.model.gaussian.denoise_net.make_generation_fast_()
             # os.makedirs(f"{self.gen_dir}/RRDB", exist_ok=True)
             os.makedirs(f"{self.gen_dir}/HR", exist_ok=True)
             os.makedirs(f"{self.gen_dir}/LR", exist_ok=True)
@@ -354,12 +466,7 @@ class Trainer:
                 img_lr = batch["img_lr"]
                 img_lr_up = batch["img_lr_up"]
                 dates = batch["dates"]
-                res = self.sample_and_test(batch)
-
-                if len(res) == 5:
-                    img_sr, preds, _, ret, _ = res
-                else:
-                    img_sr, preds, ret, ret = res
+                img_sr, preds, ret, loss = self.sample_and_test(batch)
 
                 if img_sr is not None:
                     metrics = list(self.metric_keys)

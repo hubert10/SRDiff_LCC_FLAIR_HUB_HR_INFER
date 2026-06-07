@@ -17,7 +17,7 @@ rrdb_num_feat: 64
 cond_net_ckpt: ''
 unet_dim_mults: 1|2|4|8
 clip_input: true
-denoise_fn: unet
+denoise_net: unet
 use_attn: false
 aux_l1_loss: true
 aux_ssim_loss: false

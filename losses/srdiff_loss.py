@@ -162,7 +162,7 @@ def compute_gradient_magnitude(image):
     return grad_magnitude
 
 
-def temp_consistency_gradient_magnitude_loss(img_sr):
+def temp_gradient_magnitude_consistency_loss(img_sr):
     """
     Compute dimensionless temporal gradient magnitude consistency loss.
 

@@ -3,8 +3,8 @@ import rasterio
 import numpy as np
 
 try:
-    DATA_DIR = os.environ["DATA_DIR"] + "/"
-    # DATA_DIR = "/my_data"
+    # DATA_DIR = os.environ["DATA_DIR"] + "/"
+    DATA_DIR = "/my_data"
 except Exception:
     DATA_DIR = "D:\kanyamahanga\Datasets"
 

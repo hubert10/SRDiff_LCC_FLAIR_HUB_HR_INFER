@@ -6,11 +6,11 @@ import torch.nn as nn
 from trainer import Trainer
 from utils.hparams import hparams
 from utils.utils import load_ckpt
-from models.diffsr_modules import Unet
-from models.diffusion import GaussianDiffusion
+from models.denoiser.unet import UNet
+from models.diffusion.ddpm import GaussianDiffusion
 from models.sits_aerial_seg_model import SITSAerialSegmenter
 from losses.focal_smooth import FocalLossWithSmoothing
-from models.sits_branch import SITSSegmenter
+from models.encoders.t_convformer import TConvFormer
 
 
 class SRDiffTrainer(Trainer):
@@ -35,32 +35,23 @@ class SRDiffTrainer(Trainer):
         self.loss_aux_sat_weight = hparams["hyperparams"]["loss_aux_sat_weight"]
         self.loss_main_sat_weight = hparams["hyperparams"]["loss_main_sat_weight"]
 
-        denoise_fn = Unet(
+        self.denoise_net = UNet(
             hidden_size,
             out_dim=hparams["inputs"]["num_channels_sat"],
             cond_dim=hparams["rrdb_num_feat"],
             dim_mults=dim_mults,
         )
 
-        # Define the diffusion model for training
-        cond_net = SITSSegmenter(
-            img_size=hparams["inputs"]["lr_patch_size"],
-            in_chans=hparams["inputs"]["num_channels_sat"],
-            embed_dim=hparams["models"]["t_convformer"]["embed_dim"],
-            uper_head_dim=hparams["models"]["t_convformer"]["uper_head_dim"],
-            depths=hparams["models"]["t_convformer"]["depths"],
-            num_heads=hparams["models"]["t_convformer"]["num_heads"],
-            mlp_ratio=hparams["models"]["t_convformer"]["mlp_ratio"],
-            num_classes=hparams["inputs"]["num_classes"],
-            nbts=hparams["inputs"]["nbts"],
-            pool_scales=hparams["models"]["t_convformer"]["pool_scales"],
-            spa_temp_att=hparams["models"]["t_convformer"]["spa_temp_att"],
-            conv_spa_att=hparams["models"]["t_convformer"]["conv_spa_att"],
-            decoder_channels=hparams["models"]["maxvit"]["decoder_channels"],
-            window_size=hparams["models"]["maxvit"]["window_cond_size"],
-            d_model=hparams["models"]["t_convformer"]["d_model"],
-            config=hparams,
+        self.cond_net = TConvFormer(
+            input_size=(hparams["inputs"]["lr_patch_size"], hparams["inputs"]["lr_patch_size"]),
+            stem_channels=64,
+            block_channels=hparams["models"]["t_convformer"]["block_channels"],  # [64, 128, 256, 512]
+            block_layers=hparams["models"]["t_convformer"]["block_layers"],  # [2, 2, 5, 2]
+            head_dim=32,
+            stochastic_depth_prob=0.2,
+            partition_size=hparams["models"]["maxvit"]["window_cond_size"],
         )
+
         if not hparams["infer"]:
         # if not hparams["resume"] and not hparams["infer"]:
             if hparams["cond_net_ckpt"] != "" and os.path.exists(hparams["cond_net_ckpt"]):
@@ -69,19 +60,19 @@ class SRDiffTrainer(Trainer):
                     old_dict = torch.load(weights_path, weights_only=False)
                 else:
                     old_dict = torch.load(weights_path, map_location=torch.device("cpu"))
-                model_dict = cond_net.state_dict()
+                model_dict = self.cond_net.state_dict()
                 old_dict = {k: v for k, v in old_dict.items() if (k in model_dict)}
                 model_dict.update(old_dict)
-                cond_net.load_state_dict(model_dict)
+                self.cond_net.load_state_dict(model_dict)
 
-        gaussian = GaussianDiffusion(
-            denoise_fn=denoise_fn,
-            cond_net=cond_net,
+        self.gaussian = GaussianDiffusion(
+            denoise_net=self.denoise_net,
+            cond_net=self.cond_net,
             timesteps=hparams["timesteps"],
             loss_type=hparams["loss_type"],
         )
 
-        self.model = SITSAerialSegmenter(gaussian=gaussian, config=hparams)
+        self.model = SITSAerialSegmenter(gaussian=self.gaussian, config=hparams)
         if hparams["infer"]:
             if hparams["diff_net_ckpt"] != "" and os.path.exists(
                 hparams["diff_net_ckpt"]
@@ -140,7 +131,7 @@ class SRDiffTrainer(Trainer):
         dates = batch["dates_encoding"]
         closest_idx = batch["closest_idx"]  # torch.Size([4, 2, 3, 64, 64])
 
-        # print("img_hr:", img_hr.shape)
+        print("img_hr:", img_hr.shape)
         # print("dem_elev:", dem_elev.shape)
 
         # print("img_lr:", img_lr.shape)
@@ -154,13 +145,12 @@ class SRDiffTrainer(Trainer):
         # call gaussian diffusion model for SR-prediction this should also
         # return the SR-SITS images alongside the diffusion losses
         losses, _, _, img_sr = self.model.gaussian(
+            img,
             img_hr,
             img_lr,
             img_lr_up,
-            labels_sr,
-            dates=dates,
-            closest_idx=closest_idx,
-            config=self.config,
+            dates,
+            closest_idx,
         )
 
         # print("img_sr train:", img_sr.shape)
@@ -229,17 +219,16 @@ class SRDiffTrainer(Trainer):
         dates = sample["dates_encoding"]
         closest_idx = sample["closest_idx"]  # torch.Size([4, 2, 3, 160, 160])
 
-        img_sr, rrdb_out = self.model.gaussian.sample(
+        img_sr, final_loss = self.model.gaussian.sample(
             img, # HR image for conditioning
             img_lr,
             img_lr_up,
             img_hr,
-            dates=dates,
-            config=self.config,
+            dates,
+            closest_idx
         )
 
         # print("img_sr infer:", img_sr.shape)
-
         # during sampling, only the aer branch is used
         _, _, aer_outputs = self.model(img, img_sr, dates)
         proba = torch.softmax(aer_outputs, dim=1)
@@ -267,5 +256,5 @@ class SRDiffTrainer(Trainer):
             ret["miou"].append(s["miou"])
 
             ret["n_samples"] += 1
-        return img_sr, preds, rrdb_out, ret, ret
+        return img_sr, preds, ret, final_loss
 

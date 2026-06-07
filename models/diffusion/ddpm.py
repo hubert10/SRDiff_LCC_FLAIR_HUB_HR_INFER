@@ -10,7 +10,7 @@ from utils.hparams import hparams
 from losses.srdiff_loss import (
     pixel_wise_closest_sr_sits_aer_loss,
     grad_pixel_wise_closest_sr_sits_aer_loss,
-    temp_consistency_gradient_magnitude_loss,
+    temp_gradient_magnitude_consistency_loss,
     gray_value_consistency_loss,
     cross_entropy_loss,
 )
@@ -87,9 +87,9 @@ def cosine_beta_schedule(timesteps, s=0.008):
 
 # gaussian diffusion trainer class
 class GaussianDiffusion(nn.Module):
-    def __init__(self, denoise_fn, cond_net, timesteps=1000, loss_type="l1"):
+    def __init__(self, denoise_net, cond_net, timesteps=1000, loss_type="l1"):
         super().__init__()
-        self.denoise_fn = denoise_fn
+        self.denoise_net = denoise_net
         # condition network, which is either RRDBLTAENet or HighResLTAENet
         # for satelite image time series integration
         self.cond_net = cond_net
@@ -157,6 +157,21 @@ class GaussianDiffusion(nn.Module):
         )
         self.sample_tqdm = True
 
+    def get_loss(self, pred, target, mean=True):
+        if self.loss_type == "l1":
+            loss = (target - pred).abs()
+            if mean:
+                loss = loss.mean()
+        elif self.loss_type == "l2":
+            if mean:
+                loss = torch.nn.functional.mse_loss(target, pred)
+            else:
+                loss = torch.nn.functional.mse_loss(target, pred, reduction="none")
+        else:
+            raise NotImplementedError("unknown loss type '{loss_type}'")
+
+        return loss
+
     # Calculates the mean and variance of the noised sample x_t at timestep t
     # in the forward diffusion process.
     def q_mean_variance(self, x_start, t):
@@ -213,8 +228,14 @@ class GaussianDiffusion(nn.Module):
         return closest_sat_image
 
 
+    # TRAINING STEP
+    def apply_cond_lr_encoder(self, img_lr, dates):
+        _, cond = self.cond_net(img_lr, dates)
+        return cond
+    
+    @torch.no_grad()
     def apply_cond_hr_encoder(self, img_hr):
-        _, _, res2, res3, res4 = self.aerial_net(img_hr)
+        _, _, res2, res3, res4 = self.aer_net_enc(img_hr)
         
         # print("res2:", res2.shape)
         # print("res3:", res3.shape)
@@ -230,14 +251,13 @@ class GaussianDiffusion(nn.Module):
 
     def forward(
         self,
+        img,
         img_hr,  # High-resolution (HR) image
         img_lr,  # Low-resolution (LR) input
         img_lr_up,  # Upsampled LR image
-        labels,  # Ground truth labels for classification
-        t=None,  # Diffusion timestep
         dates=None,  # Additional temporal information (for LTAE)
         closest_idx=None,  # Closest index for temporal features
-        config=None,  # Configuration parameters
+        t=None,  # Diffusion timestep
         alphas=None,  # Auxiliary parameters (for HighResNet)
         *args,
         **kwargs
@@ -257,7 +277,10 @@ class GaussianDiffusion(nn.Module):
         # cond: extracted temporal features from the low-resolution image
         # encoded with HighResnet-LTAE temporal encoder
 
-        _, _, _, cond = self.cond_net(img_lr, dates)
+        with torch.no_grad():
+            cond_hr = self.apply_cond_hr_encoder(img)
+        
+        cond = self.apply_cond_lr_encoder(img_lr, dates)
 
         # print("cond 0:", cond[0].shape)
         # print("cond 1:", cond[1].shape)
@@ -273,7 +296,7 @@ class GaussianDiffusion(nn.Module):
         # img_lr_up: shape (B, T, C, H, W) where T is the number of time steps
 
         p_losses, x_tp1, noise_pred, x_t, x_t_gt, x_0 = self.p_losses(
-            x, t, cond, img_lr, img_lr_up,  closest_idx,  *args, **kwargs
+            x, t, cond, cond_hr, img_lr, img_lr_up,  closest_idx,  *args, **kwargs
         )
         # p_losses: main loss computed based on the predicted noise and the ground truth noise
         ret = {"sr": p_losses}
@@ -288,7 +311,7 @@ class GaussianDiffusion(nn.Module):
         return ret, (x_tp1, x_t_gt, x_t), t, x_0
 
     def p_losses(
-        self, img_hr, t, cond, img_lr, img_lr_up, closest_idx, noise=None
+        self, img_hr, t, cond, cond_hr, img_lr, img_lr_up, closest_idx, noise=None
     ):
         # The auxiliary loss function is introduced here because
         # this is where the denoising process is performed and the
@@ -324,16 +347,16 @@ class GaussianDiffusion(nn.Module):
         for tps in range(img_lr_up.shape[1]):
             x_tp1_gt = self.q_sample(x_start=x_start[:, tps, :, :], t=t, noise=noise)
             x_t_gt = self.q_sample(x_start=x_start[:, tps, :, :], t=t - 1, noise=noise)
-            # noise_pred = self.denoise_fn(
+            # noise_pred = self.denoise_net(
             #     x_tp1_gt, t, cond[:, tps, :, :], img_lr_up[:, tps, :, :]
             # )
-            noise_pred = self.denoise_fn(x_tp1_gt, t, [feat[:, tps] for feat in cond])
+            noise_pred = self.denoise_net(x_tp1_gt, t, [feat[:, tps] for feat in cond], cond_hr)
 
             x_t_pred, x0_pred = self.p_sample(
                 x_tp1_gt,
                 t,
                 [feat[:, tps] for feat in cond],
-                img_lr_up[:, tps, :, :],
+                cond_hr,
                 noise_pred=noise_pred,
             )
 
@@ -386,18 +409,12 @@ class GaussianDiffusion(nn.Module):
                 + hparams["grad_px_loss_weight"]
                 * grad_pixel_wise_closest_sr_sits_aer_loss(x0_pred, img_hr, closest_idx)
                 + hparams["temp_grad_mag_loss_weight"]
-                * temp_consistency_gradient_magnitude_loss(x0_pred)
+                * temp_gradient_magnitude_consistency_loss(x0_pred)
                 + hparams["gray_value_px_loss_weight"]
                 * gray_value_consistency_loss(x0_pred, img_lr)
             )
             final_loss = hparams["main_loss_weight"] * loss + aux_loss
         
-        print("loss:", loss)
-        print("pixel_wise_closest_sr_sits_aer_loss:", pixel_wise_closest_sr_sits_aer_loss(x0_pred, img_hr, closest_idx))
-        print("grad_pixel_wise_closest_sr_sits_aer_loss:", grad_pixel_wise_closest_sr_sits_aer_loss(x0_pred, img_hr, closest_idx))
-        print("temp_consistency_gradient_magnitude_loss:", temp_consistency_gradient_magnitude_loss(x0_pred))
-        print("gray_value_consistency_loss:", gray_value_consistency_loss(x0_pred, img_lr))
-
         return final_loss, x_tp1_gt, noise_pred, x_t_pred, x_t_gt, x0_pred
 
     def shift_l1_loss(self, y_true, y_pred, border=3):
@@ -447,14 +464,14 @@ class GaussianDiffusion(nn.Module):
         x,  # noisy image at the current timestep t
         t,  # current timestep from 500 to 0
         cond,  # conditioning information (features from low-resolution image) to guide densoing process
-        hr_img,  # upsampled low-resolution image used to predict the noisy image if not given
-        noise_pred=None,  # The predicted noise at the current timestep. If not provided, it is computed using the denoise_fn.
+        cond_hr,  # upsampled low-resolution image used to predict the noisy image if not given
+        noise_pred=None,  # The predicted noise at the current timestep. If not provided, it is computed using the denoise_net.
         clip_denoised=True,  # A flag to clip the denoised image values to a valid range (e.g., [-1, 1]) to ensure stability.
         repeat_noise=False,  # A flag to control whether the noise should be repeated across the batch.
     ):
         # 1. Predict noise
         if noise_pred is None:
-            noise_pred = self.denoise_fn(x, t, cond=cond, hr_img=hr_img)
+            noise_pred = self.denoise_net(x, t, cond_lr=cond, cond_hr=cond_hr)
         b, *_, device = *x.shape, x.device
 
         # 2. Estiamete the clean image and Compute Model Mean and Variance:
@@ -518,8 +535,9 @@ class GaussianDiffusion(nn.Module):
         img_lr,  # low-resolution image used for conditioning
         img_lr_up,  # upsampled LR image used for upsampling the noisy image
         img_hr,  # shape of the output image
+        dates,
+        closest_idx,
         save_intermediate=False,
-        dates=None,
         config=None,
         alphas=None,
     ):
@@ -548,10 +566,11 @@ class GaussianDiffusion(nn.Module):
         # before the reverse diffusion process starts
         # and apply it in every iteration.
 
-        cond_net_out, _, _, cond = self.cond_net(img_lr, dates)
+        cond = self.apply_cond_lr_encoder(img_lr, dates)
         
-        # HR conditioning 
-        cond_hr = self.apply_cond_hr_encoder(img)
+        with torch.no_grad():
+            # HR conditioning 
+            cond_hr = self.apply_cond_hr_encoder(img)
 
         # 3. Iterates over the time steps from the reverse diffusion process
         it = reversed(range(0, self.num_timesteps))  # num_timesteps: 500
@@ -594,7 +613,6 @@ class GaussianDiffusion(nn.Module):
                     torch.full((b,), j, device=device, dtype=torch.long),  # t
                     [feat[:, i] for feat in cond],  # x_e
                     cond_hr, # for conditioning
-                    # img_lr_up[:, i, :, :],
                 )
                 if save_intermediate:
                     img_ = self.res2img(img_, img_lr_up[:, i, :, :])
@@ -607,14 +625,25 @@ class GaussianDiffusion(nn.Module):
 
         img_sr = torch.stack(img_sr_ts_outs, 1)
 
+        sr_pred = self.closest_lr_sits_aer(img_sr, closest_idx)
+        loss = self.get_loss(sr_pred, img_hr)
         # If you want a robust prediction, aggregate time-series predictions
         # Average logits over time (assuming model refines over time)
 
-        if save_intermediate:
-            return img_sr, cond_net_out, images
-        else:
-            return img_sr, cond_net_out
-
+        # auxiliary losses computations
+        aux_loss = (
+            hparams["px_loss_weight"]
+            * pixel_wise_closest_sr_sits_aer_loss(img_sr, img_hr, closest_idx)
+            + hparams["grad_px_loss_weight"]
+            * grad_pixel_wise_closest_sr_sits_aer_loss(img_sr, img_hr, closest_idx)
+            + hparams["temp_grad_mag_loss_weight"]
+            * temp_gradient_magnitude_consistency_loss(img_sr)
+            + hparams["gray_value_px_loss_weight"]
+            * gray_value_consistency_loss(img_sr, img_lr)
+        )
+        final_loss = hparams["main_loss_weight"] * loss + aux_loss
+        return img_sr, final_loss
+        
     # Convert a residual image back to the original scale
     # by adding back an upsampled low-resolution image
     # This is a common technique in super-resolution models
