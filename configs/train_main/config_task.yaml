@@ -10,7 +10,7 @@ paths :
     cond_net_ckpt: "/my_data/pretrain_weights/LCC_SITS_MaxViT_UPerNet_10/checkpoints/last.ckpt"
 
 tasks: 
-    train: True
+    train: False
     train_tasks: 
         init_weights_only_from_ckpt: False
         resume_training_from_ckpt: False
